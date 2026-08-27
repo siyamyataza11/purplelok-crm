@@ -72,7 +72,7 @@ export function TicketsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Support Desk</h1>
-          <p className="text-sm text-white/40 mt-0.5">{tickets.filter((t) => t.status === 'open').length} open tickets</p>
+          <p className="text-sm text-tertiary mt-0.5">{tickets.filter((t) => t.status === 'open').length} open tickets</p>
         </div>
         <Button onClick={() => setShowModal(true)}><Plus size={16} /> New Ticket</Button>
       </div>
@@ -88,25 +88,25 @@ export function TicketsPage() {
       </div>
 
       {loading ? (
-        <div className="space-y-3">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 bg-white/5 rounded-xl animate-pulse" />)}</div>
+        <div className="space-y-3">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 bg-muted rounded-xl animate-pulse" />)}</div>
       ) : filtered.length === 0 ? (
         <EmptyState icon={<LifeBuoy size={28} />} title="No tickets" action={<Button onClick={() => setShowModal(true)}><Plus size={16} /> New Ticket</Button>} />
       ) : (
         <Card>
-          <div className="divide-y divide-ink-border">
+          <div className="divide-y divide-line">
             {filtered.map((t) => (
-              <div key={t.id} className="flex items-center justify-between p-4 hover:bg-white/5 cursor-pointer" onClick={() => { setSelected(t); setView('detail'); }}>
+              <div key={t.id} className="flex items-center justify-between p-4 hover:bg-muted cursor-pointer" onClick={() => { setSelected(t); setView('detail'); }}>
                 <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-lg bg-purple/10 flex items-center justify-center text-purple-light"><LifeBuoy size={16} /></div>
+                  <div className="w-10 h-10 rounded-lg bg-purple-50 flex items-center justify-center text-purple-600"><LifeBuoy size={16} /></div>
                   <div>
-                    <p className="text-sm font-medium text-white">{t.ticket_number}</p>
-                    <p className="text-xs text-white/40">{t.subject} · {t.client?.company_name || 'Internal'}</p>
+                    <p className="text-sm font-medium text-primary">{t.ticket_number}</p>
+                    <p className="text-xs text-tertiary">{t.subject} · {t.client?.company_name || 'Internal'}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
                   <Badge variant={PRIORITY_CONFIG[t.priority].variant}>{PRIORITY_CONFIG[t.priority].label}</Badge>
                   <Badge variant={STATUS_CONFIG[t.status].variant} dot>{STATUS_CONFIG[t.status].label}</Badge>
-                  <span className="text-xs text-white/30 hidden sm:block">{timeAgo(t.created_at)}</span>
+                  <span className="text-xs text-tertiary hidden sm:block">{timeAgo(t.created_at)}</span>
                 </div>
               </div>
             ))}
@@ -206,12 +206,12 @@ function TicketDetail({ ticket, profiles, onBack, onUpdated, onUpdateStatus }: {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in max-w-[1000px] mx-auto">
-      <button onClick={onBack} className="flex items-center gap-2 text-sm text-white/40 hover:text-white"><ArrowLeft size={16} /> Back to Tickets</button>
+      <button onClick={onBack} className="flex items-center gap-2 text-sm text-tertiary hover:text-primary"><ArrowLeft size={16} /> Back to Tickets</button>
 
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{ticket.subject}</h1>
-          <p className="text-sm text-white/40">{ticket.ticket_number} · {ticket.client?.company_name || 'Internal'}</p>
+          <p className="text-sm text-tertiary">{ticket.ticket_number} · {ticket.client?.company_name || 'Internal'}</p>
         </div>
         <div className="flex gap-2">
           <Badge variant={PRIORITY_CONFIG[ticket.priority].variant}>{PRIORITY_CONFIG[ticket.priority].label}</Badge>
@@ -233,7 +233,7 @@ function TicketDetail({ ticket, profiles, onBack, onUpdated, onUpdateStatus }: {
 
       {ticket.description && (
         <Card className="p-5">
-          <p className="text-sm text-white/60 whitespace-pre-line">{ticket.description}</p>
+          <p className="text-sm text-secondary whitespace-pre-line">{ticket.description}</p>
         </Card>
       )}
 
@@ -248,11 +248,11 @@ function TicketDetail({ ticket, profiles, onBack, onUpdated, onUpdateStatus }: {
                 <Avatar name={m.author?.full_name} src={m.author?.avatar_url} size="sm" />
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-medium text-white">{m.author?.full_name || 'Unknown'}</p>
+                    <p className="text-sm font-medium text-primary">{m.author?.full_name || 'Unknown'}</p>
                     {m.internal && <Badge variant="warning">Internal</Badge>}
-                    <span className="text-xs text-white/30">{timeAgo(m.created_at)}</span>
+                    <span className="text-xs text-tertiary">{timeAgo(m.created_at)}</span>
                   </div>
-                  <p className="text-sm text-white/70 mt-1">{m.body}</p>
+                  <p className="text-sm text-secondary mt-1">{m.body}</p>
                 </div>
               </div>
             ))}
@@ -265,7 +265,7 @@ function TicketDetail({ ticket, profiles, onBack, onUpdated, onUpdateStatus }: {
           <div className="flex-1">
             <Textarea label="" rows={2} value={newMsg} onChange={(e) => setNewMsg(e.target.value)} placeholder="Type a reply..." />
           </div>
-          <label className="flex items-center gap-2 text-sm text-white/50 cursor-pointer pb-2">
+          <label className="flex items-center gap-2 text-sm text-secondary cursor-pointer pb-2">
             <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} className="w-4 h-4 accent-purple" />
             Internal
           </label>

@@ -194,12 +194,12 @@ export function AssistantPage() {
   return (
     <div className="p-6 animate-fade-in max-w-[1000px] mx-auto h-[calc(100vh-4rem)] flex flex-col">
       <div className="flex items-center gap-3 mb-4">
-        <div className="w-10 h-10 rounded-xl gradient-purple flex items-center justify-center animate-pulse-glow">
+        <div className="w-10 h-10 rounded-xl bg-purple-600 flex items-center justify-center animate-pulse-glow">
           <Sparkles size={20} className="text-white" />
         </div>
         <div>
           <h1 className="text-2xl font-bold tracking-tight">PURPLE AI</h1>
-          <p className="text-sm text-white/40">Your AI business assistant</p>
+          <p className="text-sm text-tertiary">Your AI business assistant</p>
         </div>
         <Badge variant="purple" dot className="ml-auto">Online</Badge>
       </div>
@@ -209,27 +209,27 @@ export function AssistantPage() {
         {messages.map((msg, i) => (
           <div key={i} className={cn('flex gap-3', msg.role === 'user' && 'flex-row-reverse')}>
             {msg.role === 'assistant' ? (
-              <div className="w-8 h-8 rounded-lg gradient-purple flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-lg bg-purple-600 flex items-center justify-center shrink-0">
                 <Sparkles size={14} className="text-white" />
               </div>
             ) : (
               <Avatar name={profile?.full_name} src={profile?.avatar_url} size="sm" />
             )}
-            <div className={cn('max-w-[80%] rounded-2xl px-4 py-3', msg.role === 'assistant' ? 'bg-white/5 border border-ink-border' : 'gradient-purple')}>
-              <p className="text-sm text-white/90 whitespace-pre-line">{msg.content}</p>
+            <div className={cn('max-w-[80%] rounded-xl px-4 py-3', msg.role === 'assistant' ? 'bg-muted border border-line' : 'bg-purple-600')}>
+              <p className="text-sm text-primary whitespace-pre-line">{msg.content}</p>
             </div>
           </div>
         ))}
         {thinking && (
           <div className="flex gap-3">
-            <div className="w-8 h-8 rounded-lg gradient-purple flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-purple-600 flex items-center justify-center shrink-0">
               <Sparkles size={14} className="text-white animate-pulse" />
             </div>
-            <div className="bg-white/5 border border-ink-border rounded-2xl px-4 py-3">
+            <div className="bg-muted border border-line rounded-xl px-4 py-3">
               <div className="flex gap-1">
-                <span className="w-2 h-2 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-2 h-2 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-2 h-2 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                <span className="w-2 h-2 bg-tertiary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="w-2 h-2 bg-tertiary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="w-2 h-2 bg-tertiary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
               </div>
             </div>
           </div>
@@ -244,9 +244,9 @@ export function AssistantPage() {
             <button
               key={s.text}
               onClick={() => handleSend(s.text)}
-              className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-white/5 border border-ink-border hover:border-purple/30 hover:bg-purple/5 transition-all text-sm text-white/70 text-left"
+              className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-muted border border-line hover:border-purple-200 hover:bg-purple-50/50 transition-all text-sm text-secondary text-left"
             >
-              <span className="text-purple-light">{s.icon}</span>
+              <span className="text-purple-600">{s.icon}</span>
               {s.text}
             </button>
           ))}

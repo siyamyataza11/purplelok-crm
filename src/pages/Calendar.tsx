@@ -18,7 +18,7 @@ const TYPE_CONFIG: Record<MeetingType, { color: string; label: string }> = {
   site_visit: { color: 'bg-green-500', label: 'Site Visit' },
   collection: { color: 'bg-orange-500', label: 'Collection' },
   launch: { color: 'bg-purple-light', label: 'Launch' },
-  milestone: { color: 'bg-yellow-500', label: 'Milestone' },
+  milestone: { color: 'bg-amber-500', label: 'Milestone' },
 };
 
 export function CalendarPage() {
@@ -68,7 +68,7 @@ export function CalendarPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Calendar</h1>
-          <p className="text-sm text-white/40 mt-0.5">Meetings, deadlines, and events</p>
+          <p className="text-sm text-tertiary mt-0.5">Meetings, deadlines, and events</p>
         </div>
         <Button onClick={() => { setSelectedDate(new Date().toISOString().slice(0, 10)); setShowModal(true); }}><Plus size={16} /> New Event</Button>
       </div>
@@ -87,7 +87,7 @@ export function CalendarPage() {
       <Card className="p-4">
         <div className="grid grid-cols-7 gap-1 mb-2">
           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
-            <div key={d} className="text-center text-xs font-medium text-white/40 py-2">{d}</div>
+            <div key={d} className="text-center text-xs font-medium text-tertiary py-2">{d}</div>
           ))}
         </div>
         <div className="grid grid-cols-7 gap-1">
@@ -96,12 +96,12 @@ export function CalendarPage() {
               key={i}
               onClick={() => { setSelectedDate(day.date.toISOString().slice(0, 10)); }}
               className={cn(
-                'min-h-[80px] p-2 rounded-lg border cursor-pointer transition-colors hover:bg-white/5',
-                isToday(day.date) ? 'border-purple/50 bg-purple/5' : 'border-ink-border/50',
+                'min-h-[80px] p-2 rounded-lg border cursor-pointer transition-colors hover:bg-muted',
+                isToday(day.date) ? 'border-purple-200 bg-purple-50/50' : 'border-line/50',
                 day.date.getMonth() !== currentDate.getMonth() && 'opacity-30'
               )}
             >
-              <p className={cn('text-xs mb-1', isToday(day.date) ? 'text-purple-light font-bold' : 'text-white/40')}>{day.date.getDate()}</p>
+              <p className={cn('text-xs mb-1', isToday(day.date) ? 'text-purple-600 font-bold' : 'text-tertiary')}>{day.date.getDate()}</p>
               <div className="space-y-1">
                 {day.meetings.slice(0, 3).map((m) => (
                   <div
@@ -111,7 +111,7 @@ export function CalendarPage() {
                     {m.title}
                   </div>
                 ))}
-                {day.meetings.length > 3 && <p className="text-[10px] text-white/30">+{day.meetings.length - 3} more</p>}
+                {day.meetings.length > 3 && <p className="text-[10px] text-tertiary">+{day.meetings.length - 3} more</p>}
               </div>
             </div>
           ))}

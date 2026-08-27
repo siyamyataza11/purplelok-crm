@@ -80,7 +80,7 @@ export function ReportsPage() {
   }, [invoices, payments, projects, clients, leads, tasks]);
 
   if (loading) {
-    return <div className="p-6"><div className="h-8 w-48 bg-white/5 rounded-lg animate-pulse" /></div>;
+    return <div className="p-6"><div className="h-8 w-48 bg-muted rounded-lg animate-pulse" /></div>;
   }
 
   const maxRevenue = Math.max(...metrics.months.map((m) => m.revenue), 1);
@@ -89,15 +89,15 @@ export function ReportsPage() {
     <div className="p-6 space-y-6 animate-fade-in max-w-[1400px] mx-auto">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Reports & Analytics</h1>
-        <p className="text-sm text-white/40 mt-0.5">Business performance overview</p>
+        <p className="text-sm text-tertiary mt-0.5">Business performance overview</p>
       </div>
 
       {/* Key metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <ReportCard icon={<DollarSign size={18} />} label="Total Revenue" value={formatCurrency(metrics.totalRevenue)} accent="text-green-400" bg="bg-green-500/10" />
-        <ReportCard icon={<TrendingUp size={18} />} label="This Month" value={formatCurrency(metrics.monthlyRevenue)} accent="text-purple-light" bg="bg-purple/10" />
-        <ReportCard icon={<AlertCircle size={18} />} label="Outstanding" value={formatCurrency(metrics.outstanding)} accent="text-orange-400" bg="bg-orange-500/10" />
-        <ReportCard icon={<AlertCircle size={18} />} label="Overdue" value={formatCurrency(metrics.overdue)} accent="text-red-400" bg="bg-red-500/10" />
+        <ReportCard icon={<DollarSign size={18} />} label="Total Revenue" value={formatCurrency(metrics.totalRevenue)} accent="text-green-600" bg="bg-green-50" />
+        <ReportCard icon={<TrendingUp size={18} />} label="This Month" value={formatCurrency(metrics.monthlyRevenue)} accent="text-purple-600" bg="bg-purple-50" />
+        <ReportCard icon={<AlertCircle size={18} />} label="Outstanding" value={formatCurrency(metrics.outstanding)} accent="text-orange-600" bg="bg-orange-50" />
+        <ReportCard icon={<AlertCircle size={18} />} label="Overdue" value={formatCurrency(metrics.overdue)} accent="text-red-600" bg="bg-red-50" />
       </div>
 
       {/* Revenue chart */}
@@ -108,11 +108,11 @@ export function ReportsPage() {
             {metrics.months.map((m, i) => (
               <div key={i} className="flex-1 flex flex-col items-center gap-2 group">
                 <div className="w-full flex-1 flex items-end">
-                  <div className="w-full rounded-t-lg gradient-purple transition-all duration-300 group-hover:opacity-80 relative" style={{ height: `${(m.revenue / maxRevenue) * 100}%`, minHeight: '4px' }}>
+                  <div className="w-full rounded-t-lg bg-purple-600 transition-all duration-300 group-hover:opacity-90 relative" style={{ height: `${(m.revenue / maxRevenue) * 100}%`, minHeight: '4px' }}>
                     <div className="absolute -top-7 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium whitespace-nowrap">{formatCurrency(m.revenue)}</div>
                   </div>
                 </div>
-                <p className="text-xs text-white/40">{m.label}</p>
+                <p className="text-xs text-tertiary">{m.label}</p>
               </div>
             ))}
           </div>
@@ -125,14 +125,14 @@ export function ReportsPage() {
           <CardHeader><CardTitle>Lead Conversion</CardTitle></CardHeader>
           <CardBody className="space-y-4">
             <div className="grid grid-cols-3 gap-4">
-              <StatBox label="Won" value={metrics.wonLeads} color="text-green-400" />
-              <StatBox label="Lost" value={metrics.lostLeads} color="text-red-400" />
-              <StatBox label="Rate" value={`${metrics.conversionRate.toFixed(1)}%`} color="text-purple-light" />
+              <StatBox label="Won" value={metrics.wonLeads} color="text-green-600" />
+              <StatBox label="Lost" value={metrics.lostLeads} color="text-red-600" />
+              <StatBox label="Rate" value={`${metrics.conversionRate.toFixed(1)}%`} color="text-purple-600" />
             </div>
             <div>
-              <div className="flex justify-between text-sm mb-2"><span className="text-white/40">Conversion Rate</span><span>{metrics.conversionRate.toFixed(1)}%</span></div>
-              <div className="h-2 bg-white/5 rounded-full overflow-hidden">
-                <div className="h-full gradient-purple rounded-full transition-all duration-500" style={{ width: `${metrics.conversionRate}%` }} />
+              <div className="flex justify-between text-sm mb-2"><span className="text-tertiary">Conversion Rate</span><span>{metrics.conversionRate.toFixed(1)}%</span></div>
+              <div className="h-2 bg-muted rounded-full overflow-hidden">
+                <div className="h-full bg-purple-600 rounded-full transition-all duration-500" style={{ width: `${metrics.conversionRate}%` }} />
               </div>
             </div>
           </CardBody>
@@ -143,16 +143,16 @@ export function ReportsPage() {
           <CardHeader><CardTitle>Project Stats</CardTitle></CardHeader>
           <CardBody className="space-y-4">
             <div className="grid grid-cols-3 gap-4">
-              <StatBox label="Active" value={metrics.activeProjects} color="text-blue-400" />
-              <StatBox label="Completed" value={metrics.completedProjects} color="text-green-400" />
-              <StatBox label="Total" value={projects.length} color="text-white/60" />
+              <StatBox label="Active" value={metrics.activeProjects} color="text-blue-600" />
+              <StatBox label="Completed" value={metrics.completedProjects} color="text-green-600" />
+              <StatBox label="Total" value={projects.length} color="text-secondary" />
             </div>
             <div>
-              <div className="flex justify-between text-sm mb-2"><span className="text-white/40">Task Completion</span><span>{metrics.taskCompletion.toFixed(1)}%</span></div>
-              <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+              <div className="flex justify-between text-sm mb-2"><span className="text-tertiary">Task Completion</span><span>{metrics.taskCompletion.toFixed(1)}%</span></div>
+              <div className="h-2 bg-muted rounded-full overflow-hidden">
                 <div className="h-full bg-green-500 rounded-full transition-all duration-500" style={{ width: `${metrics.taskCompletion}%` }} />
               </div>
-              <p className="text-xs text-white/30 mt-1">{metrics.doneTasks} of {metrics.totalTasks} tasks done</p>
+              <p className="text-xs text-tertiary mt-1">{metrics.doneTasks} of {metrics.totalTasks} tasks done</p>
             </div>
           </CardBody>
         </Card>
@@ -163,19 +163,19 @@ export function ReportsPage() {
         <CardHeader><CardTitle>Top Clients by Revenue</CardTitle></CardHeader>
         <CardBody>
           {metrics.clientRevenue.length === 0 || metrics.clientRevenue[0].revenue === 0 ? (
-            <p className="text-sm text-white/40 text-center py-4">No revenue data yet</p>
+            <p className="text-sm text-tertiary text-center py-4">No revenue data yet</p>
           ) : (
             <div className="space-y-3">
               {metrics.clientRevenue.map((c, i) => (
                 <div key={i} className="flex items-center gap-3">
-                  <span className="text-sm text-white/30 w-6">{i + 1}</span>
+                  <span className="text-sm text-tertiary w-6">{i + 1}</span>
                   <div className="flex-1">
-                    <p className="text-sm text-white/80">{c.name}</p>
-                    <div className="h-1.5 bg-white/5 rounded-full overflow-hidden mt-1">
-                      <div className="h-full gradient-purple rounded-full" style={{ width: `${(c.revenue / metrics.clientRevenue[0].revenue) * 100}%` }} />
+                    <p className="text-sm text-primary">{c.name}</p>
+                    <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-1">
+                      <div className="h-full bg-purple-600 rounded-full" style={{ width: `${(c.revenue / metrics.clientRevenue[0].revenue) * 100}%` }} />
                     </div>
                   </div>
-                  <span className="text-sm font-semibold text-white/80">{formatCurrency(c.revenue)}</span>
+                  <span className="text-sm font-semibold text-primary">{formatCurrency(c.revenue)}</span>
                 </div>
               ))}
             </div>
@@ -190,7 +190,7 @@ function ReportCard({ icon, label, value, accent, bg }: { icon: React.ReactNode;
   return (
     <Card className="p-5">
       <div className={cn('w-10 h-10 rounded-lg flex items-center justify-center mb-3', bg, accent)}>{icon}</div>
-      <p className="text-xs text-white/40">{label}</p>
+      <p className="text-xs text-tertiary">{label}</p>
       <p className="text-xl font-bold">{value}</p>
     </Card>
   );
@@ -198,9 +198,9 @@ function ReportCard({ icon, label, value, accent, bg }: { icon: React.ReactNode;
 
 function StatBox({ label, value, color }: { label: string; value: string | number; color: string }) {
   return (
-    <div className="text-center p-3 rounded-lg bg-white/5">
+    <div className="text-center p-3 rounded-lg bg-muted">
       <p className={cn('text-2xl font-bold', color)}>{value}</p>
-      <p className="text-xs text-white/40 mt-1">{label}</p>
+      <p className="text-xs text-tertiary mt-1">{label}</p>
     </div>
   );
 }

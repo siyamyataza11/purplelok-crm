@@ -14,7 +14,7 @@ import { formatDate, cn, isToday, isOverdue } from '@/lib/utils';
 import { Plus, CheckSquare, Check, Clock, Flag, User } from 'lucide-react';
 
 const STATUS_COLS: { id: TaskStatus; label: string; color: string }[] = [
-  { id: 'todo', label: 'To Do', color: 'border-l-gray-500' },
+  { id: 'todo', label: 'To Do', color: 'border-l-gray-400' },
   { id: 'in_progress', label: 'In Progress', color: 'border-l-purple-500' },
   { id: 'review', label: 'Review', color: 'border-l-orange-500' },
   { id: 'done', label: 'Done', color: 'border-l-green-500' },
@@ -81,51 +81,51 @@ export function TasksPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Tasks</h1>
-          <p className="text-sm text-white/40 mt-0.5">{tasks.length} total tasks</p>
+          <p className="text-sm text-tertiary mt-0.5">{tasks.length} total tasks</p>
         </div>
         <Button onClick={() => setShowModal(true)}><Plus size={16} /> New Task</Button>
       </div>
 
       <div className="flex gap-2">
         {(['all', 'mine', 'today', 'overdue'] as const).map((f) => (
-          <button key={f} onClick={() => setFilter(f)} className={cn('px-3 py-1.5 rounded-lg text-sm capitalize transition-colors', filter === f ? 'bg-purple/15 text-purple-light' : 'text-white/40 hover:text-white hover:bg-white/5')}>
+          <button key={f} onClick={() => setFilter(f)} className={cn('px-3 py-1.5 rounded-lg text-sm capitalize transition-colors', filter === f ? 'bg-purple-50 text-purple-600' : 'text-tertiary hover:text-primary hover:bg-muted')}>
             {f === 'mine' ? 'My Tasks' : f}
           </button>
         ))}
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-4 gap-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-64 bg-white/5 rounded-2xl animate-pulse" />)}</div>
+        <div className="grid grid-cols-4 gap-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-64 bg-muted rounded-xl animate-pulse" />)}</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {STATUS_COLS.map((col) => (
-            <div key={col.id} className="rounded-2xl border border-ink-border bg-ink-soft/30 min-h-[300px]">
-              <div className={cn('px-4 py-3 border-b border-ink-border border-l-4 rounded-t-2xl', col.color)}>
+            <div key={col.id} className="rounded-xl border border-line bg-canvas min-h-[300px]">
+              <div className={cn('px-4 py-3 border-b border-line border-l-4 rounded-t-xl', col.color)}>
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold text-white/80">{col.label}</p>
-                  <span className="text-xs text-white/40">{byStatus[col.id].length}</span>
+                  <p className="text-sm font-semibold text-primary">{col.label}</p>
+                  <span className="text-xs text-tertiary">{byStatus[col.id].length}</span>
                 </div>
               </div>
               <div className="p-2 space-y-2 max-h-[60vh] overflow-y-auto">
                 {byStatus[col.id].length === 0 ? (
-                  <p className="text-center text-xs text-white/20 py-8">No tasks</p>
+                  <p className="text-center text-xs text-tertiary py-8">No tasks</p>
                 ) : (
                   byStatus[col.id].map((t) => (
                     <div key={t.id} className="card p-3 group">
                       <div className="flex items-start gap-2 mb-2">
                         <button
                           onClick={() => moveTask(t, t.status === 'done' ? 'todo' : 'done')}
-                          className={cn('w-4 h-4 rounded border-2 flex items-center justify-center mt-0.5 shrink-0 transition-colors', t.status === 'done' ? 'bg-green-500 border-green-500' : 'border-white/20 hover:border-purple-light')}
+                          className={cn('w-4 h-4 rounded border-2 flex items-center justify-center mt-0.5 shrink-0 transition-colors', t.status === 'done' ? 'bg-green-500 border-green-500' : 'border-line hover:border-purple-600')}
                         >
                           {t.status === 'done' && <Check size={10} className="text-white" />}
                         </button>
-                        <p className={cn('text-sm flex-1', t.status === 'done' ? 'text-white/40 line-through' : 'text-white/80')}>{t.title}</p>
+                        <p className={cn('text-sm flex-1', t.status === 'done' ? 'text-tertiary line-through' : 'text-primary')}>{t.title}</p>
                       </div>
-                      {t.description && <p className="text-xs text-white/40 mb-2 pl-6">{t.description}</p>}
+                      {t.description && <p className="text-xs text-tertiary mb-2 pl-6">{t.description}</p>}
                       <div className="flex items-center justify-between pl-6">
                         <Badge variant={PRIORITY_CONFIG[t.priority].variant}>{PRIORITY_CONFIG[t.priority].label}</Badge>
                         {t.deadline && (
-                          <span className={cn('text-xs flex items-center gap-1', isOverdue(t.deadline) && t.status !== 'done' ? 'text-red-400' : 'text-white/30')}>
+                          <span className={cn('text-xs flex items-center gap-1', isOverdue(t.deadline) && t.status !== 'done' ? 'text-red-600' : 'text-tertiary')}>
                             <Clock size={11} /> {formatDate(t.deadline)}
                           </span>
                         )}
@@ -133,15 +133,15 @@ export function TasksPage() {
                       {t.assigned_to_profile && (
                         <div className="flex items-center gap-1.5 mt-2 pl-6">
                           <Avatar name={t.assigned_to_profile.full_name} src={t.assigned_to_profile.avatar_url} size="xs" />
-                          <span className="text-xs text-white/40">{t.assigned_to_profile.full_name}</span>
+                          <span className="text-xs text-tertiary">{t.assigned_to_profile.full_name}</span>
                         </div>
                       )}
                       <div className="flex gap-1 mt-2 pl-6 opacity-0 group-hover:opacity-100 transition-opacity">
                         {t.status !== 'done' && (
-                          <button onClick={() => moveTask(t, 'in_progress')} className="text-[10px] px-2 py-0.5 rounded bg-white/5 text-white/50 hover:text-white">Start</button>
+                          <button onClick={() => moveTask(t, 'in_progress')} className="text-[10px] px-2 py-0.5 rounded bg-muted text-secondary hover:text-primary">Start</button>
                         )}
-                        {t.status === 'in_progress' && <button onClick={() => moveTask(t, 'review')} className="text-[10px] px-2 py-0.5 rounded bg-white/5 text-white/50 hover:text-white">Review</button>}
-                        {t.status === 'review' && <button onClick={() => moveTask(t, 'done')} className="text-[10px] px-2 py-0.5 rounded bg-white/5 text-white/50 hover:text-white">Complete</button>}
+                        {t.status === 'in_progress' && <button onClick={() => moveTask(t, 'review')} className="text-[10px] px-2 py-0.5 rounded bg-muted text-secondary hover:text-primary">Review</button>}
+                        {t.status === 'review' && <button onClick={() => moveTask(t, 'done')} className="text-[10px] px-2 py-0.5 rounded bg-muted text-secondary hover:text-primary">Complete</button>}
                       </div>
                     </div>
                   ))

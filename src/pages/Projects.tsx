@@ -19,7 +19,7 @@ const STATUS_COLUMNS: { id: ProjectStatus; label: string; color: string }[] = [
   { id: 'in_progress', label: 'In Progress', color: 'border-l-purple-500' },
   { id: 'review', label: 'Review', color: 'border-l-orange-500' },
   { id: 'completed', label: 'Completed', color: 'border-l-green-500' },
-  { id: 'on_hold', label: 'On Hold', color: 'border-l-gray-500' },
+  { id: 'on_hold', label: 'On Hold', color: 'border-l-gray-400' },
 ];
 
 const TYPE_LABELS: Record<ProjectType, string> = {
@@ -97,7 +97,7 @@ export function ProjectsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Projects</h1>
-          <p className="text-sm text-white/40 mt-0.5">{projects.length} total projects</p>
+          <p className="text-sm text-tertiary mt-0.5">{projects.length} total projects</p>
         </div>
         <Button onClick={() => setShowModal(true)}><Plus size={16} /> New Project</Button>
       </div>
@@ -115,7 +115,7 @@ export function ProjectsPage() {
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-5 gap-4">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-64 bg-white/5 rounded-2xl animate-pulse" />)}</div>
+        <div className="grid grid-cols-5 gap-4">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-64 bg-muted rounded-xl animate-pulse" />)}</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
           {STATUS_COLUMNS.map((col) => (
@@ -124,17 +124,17 @@ export function ProjectsPage() {
               onDragOver={(e) => { e.preventDefault(); setDragOverStatus(col.id); }}
               onDragLeave={() => setDragOverStatus(null)}
               onDrop={() => handleDrop(col.id)}
-              className={cn('rounded-2xl border border-ink-border bg-ink-soft/30 min-h-[300px] transition-colors', dragOverStatus === col.id && 'border-purple/50 bg-purple/5')}
+              className={cn('rounded-xl border border-line bg-canvas min-h-[300px] transition-colors', dragOverStatus === col.id && 'border-purple/50 bg-purple-50/50')}
             >
-              <div className={cn('px-4 py-3 border-b border-ink-border border-l-4 rounded-t-2xl', col.color)}>
+              <div className={cn('px-4 py-3 border-b border-line border-l-4 rounded-t-xl', col.color)}>
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold text-white/80">{col.label}</p>
-                  <span className="text-xs text-white/40">{byStatus[col.id].length}</span>
+                  <p className="text-sm font-semibold text-primary">{col.label}</p>
+                  <span className="text-xs text-tertiary">{byStatus[col.id].length}</span>
                 </div>
               </div>
               <div className="p-2 space-y-2 max-h-[60vh] overflow-y-auto">
                 {byStatus[col.id].length === 0 ? (
-                  <p className="text-center text-xs text-white/20 py-8">Drop projects here</p>
+                  <p className="text-center text-xs text-tertiary py-8">Drop projects here</p>
                 ) : (
                   byStatus[col.id].map((p) => (
                     <div
@@ -143,27 +143,27 @@ export function ProjectsPage() {
                       onDragStart={() => setDraggedId(p.id)}
                       onDragEnd={() => { setDraggedId(null); setDragOverStatus(null); }}
                       onClick={() => { setSelected(p); setView('detail'); }}
-                      className={cn('card p-3 cursor-pointer hover:border-white/15 transition-all group', draggedId === p.id && 'opacity-40')}
+                      className={cn('card p-3 cursor-pointer hover:border-[#D0D5DD] transition-all group', draggedId === p.id && 'opacity-40')}
                     >
                       <div className="flex items-start justify-between mb-2">
-                        <p className="text-sm font-medium text-white truncate flex-1">{p.name}</p>
-                        <GripVertical size={14} className="text-white/20 group-hover:text-white/40" />
+                        <p className="text-sm font-medium text-primary truncate flex-1">{p.name}</p>
+                        <GripVertical size={14} className="text-tertiary group-hover:text-tertiary" />
                       </div>
-                      <p className="text-xs text-white/40 mb-2">{p.client?.company_name}</p>
+                      <p className="text-xs text-tertiary mb-2">{p.client?.company_name}</p>
                       <div className="flex items-center gap-2 mb-2">
                         <Badge variant="purple-soft">{TYPE_LABELS[p.type]}</Badge>
                         <Badge variant={HEALTH_CONFIG[p.health].variant} dot>{HEALTH_CONFIG[p.health].label}</Badge>
                       </div>
-                      <div className="flex items-center justify-between text-xs text-white/30">
+                      <div className="flex items-center justify-between text-xs text-tertiary">
                         <span>{p.progress}%</span>
                         {p.due_date && (
-                          <span className={cn(isOverdue(p.due_date) && p.status !== 'completed' && 'text-red-400')}>
+                          <span className={cn(isOverdue(p.due_date) && p.status !== 'completed' && 'text-red-600')}>
                             {formatDate(p.due_date)}
                           </span>
                         )}
                       </div>
-                      <div className="mt-2 h-1.5 bg-white/5 rounded-full overflow-hidden">
-                        <div className="h-full gradient-purple rounded-full transition-all" style={{ width: `${p.progress}%` }} />
+                      <div className="mt-2 h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div className="h-full bg-purple-600 rounded-full transition-all" style={{ width: `${p.progress}%` }} />
                       </div>
                     </div>
                   ))
@@ -236,9 +236,9 @@ function ProjectModal({ open, onClose, clients, profiles, onSaved }: { open: boo
           <label className="label-text block mb-2">Assign Team Members</label>
           <div className="grid grid-cols-2 gap-2">
             {profiles.map((p) => (
-              <label key={p.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-white/5 cursor-pointer">
+              <label key={p.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted cursor-pointer">
                 <input type="checkbox" checked={assignedTo.includes(p.id)} onChange={(e) => setAssignedTo(e.target.checked ? [...assignedTo, p.id] : assignedTo.filter((id) => id !== p.id))} className="w-4 h-4 accent-purple" />
-                <span className="text-sm text-white/70">{p.full_name}</span>
+                <span className="text-sm text-secondary">{p.full_name}</span>
               </label>
             ))}
           </div>
@@ -289,12 +289,12 @@ function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Proj
 
   return (
     <div className="p-6 space-y-6 animate-fade-in max-w-[1200px] mx-auto">
-      <button onClick={onBack} className="flex items-center gap-2 text-sm text-white/40 hover:text-white"><ArrowLeft size={16} /> Back to Projects</button>
+      <button onClick={onBack} className="flex items-center gap-2 text-sm text-tertiary hover:text-primary"><ArrowLeft size={16} /> Back to Projects</button>
 
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{project.name}</h1>
-          <p className="text-sm text-white/40">{project.client?.company_name} · {TYPE_LABELS[project.type]}</p>
+          <p className="text-sm text-tertiary">{project.client?.company_name} · {TYPE_LABELS[project.type]}</p>
         </div>
         <Badge variant={HEALTH_CONFIG[project.health].variant} dot>{HEALTH_CONFIG[project.health].label}</Badge>
       </div>
@@ -306,10 +306,10 @@ function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Proj
             <h3 className="text-sm font-semibold mb-4">Progress & Health</h3>
             <div className="space-y-4">
               <div>
-                <div className="flex justify-between text-sm mb-2"><span className="text-white/40">Progress</span><span className="font-medium">{progress}%</span></div>
+                <div className="flex justify-between text-sm mb-2"><span className="text-tertiary">Progress</span><span className="font-medium">{progress}%</span></div>
                 <input type="range" min={0} max={100} value={progress} onChange={(e) => setProgress(Number(e.target.value))} className="w-full accent-purple" />
-                <div className="h-2 bg-white/5 rounded-full overflow-hidden mt-2">
-                  <div className="h-full gradient-purple rounded-full transition-all" style={{ width: `${progress}%` }} />
+                <div className="h-2 bg-muted rounded-full overflow-hidden mt-2">
+                  <div className="h-full bg-purple-600 rounded-full transition-all" style={{ width: `${progress}%` }} />
                 </div>
               </div>
               <div>
@@ -339,12 +339,12 @@ function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Proj
             ) : (
               <div className="space-y-2">
                 {milestones.map((m) => (
-                  <div key={m.id} className="flex items-center gap-3 p-3 rounded-lg bg-white/5 group">
-                    <button onClick={() => toggleMilestone(m)} className={cn('w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors', m.completed ? 'bg-green-500 border-green-500' : 'border-white/20')}>
+                  <div key={m.id} className="flex items-center gap-3 p-3 rounded-lg bg-muted group">
+                    <button onClick={() => toggleMilestone(m)} className={cn('w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors', m.completed ? 'bg-green-500 border-green-500' : 'border-line')}>
                       {m.completed && <CheckCircle2 size={12} className="text-white" />}
                     </button>
-                    <span className={cn('text-sm flex-1', m.completed ? 'text-white/40 line-through' : 'text-white/80')}>{m.title}</span>
-                    {m.due_date && <span className="text-xs text-white/30">{formatDate(m.due_date)}</span>}
+                    <span className={cn('text-sm flex-1', m.completed ? 'text-tertiary line-through' : 'text-primary')}>{m.title}</span>
+                    {m.due_date && <span className="text-xs text-tertiary">{formatDate(m.due_date)}</span>}
                   </div>
                 ))}
               </div>
@@ -354,7 +354,7 @@ function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Proj
           {project.description && (
             <Card className="p-6">
               <h3 className="text-sm font-semibold mb-3">Description</h3>
-              <p className="text-sm text-white/60 whitespace-pre-line">{project.description}</p>
+              <p className="text-sm text-secondary whitespace-pre-line">{project.description}</p>
             </Card>
           )}
         </div>
@@ -374,13 +374,13 @@ function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Proj
           <Card className="p-5">
             <h3 className="text-sm font-semibold mb-3">Assigned Team</h3>
             {assignedMembers.length === 0 ? (
-              <p className="text-sm text-white/30">No one assigned</p>
+              <p className="text-sm text-tertiary">No one assigned</p>
             ) : (
               <div className="space-y-2">
                 {assignedMembers.map((m) => (
                   <div key={m.id} className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-full gradient-purple flex items-center justify-center text-xs font-semibold">{m.full_name?.[0] || '?'}</div>
-                    <span className="text-sm text-white/70">{m.full_name}</span>
+                    <div className="w-7 h-7 rounded-full bg-purple-600 flex items-center justify-center text-xs font-semibold text-white">{m.full_name?.[0] || '?'}</div>
+                    <span className="text-sm text-secondary">{m.full_name}</span>
                   </div>
                 ))}
               </div>
@@ -395,10 +395,10 @@ function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Proj
 function DetailRow({ icon, label, value, overdue }: { icon: React.ReactNode; label: string; value: string; overdue?: boolean }) {
   return (
     <div className="flex items-center gap-3">
-      <div className="text-white/30">{icon}</div>
+      <div className="text-tertiary">{icon}</div>
       <div className="flex-1">
-        <p className="text-xs text-white/40">{label}</p>
-        <p className={cn('text-sm', overdue ? 'text-red-400' : 'text-white/80')}>{value}</p>
+        <p className="text-xs text-tertiary">{label}</p>
+        <p className={cn('text-sm', overdue ? 'text-red-600' : 'text-primary')}>{value}</p>
       </div>
     </div>
   );

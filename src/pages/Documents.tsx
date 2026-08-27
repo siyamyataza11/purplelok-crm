@@ -58,14 +58,14 @@ export function DocumentsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Documents</h1>
-          <p className="text-sm text-white/40 mt-0.5">{documents.length} files</p>
+          <p className="text-sm text-tertiary mt-0.5">{documents.length} files</p>
         </div>
         <Button onClick={() => setShowModal(true)}><Plus size={16} /> Add Document</Button>
       </div>
 
       <div className="flex gap-3">
         <div className="relative flex-1">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-tertiary" />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search documents..." className="input-field pl-10" />
         </div>
         <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="input-field w-auto">
@@ -83,7 +83,7 @@ export function DocumentsPage() {
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">{Array.from({ length: 12 }).map((_, i) => <div key={i} className="h-32 bg-white/5 rounded-xl animate-pulse" />)}</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">{Array.from({ length: 12 }).map((_, i) => <div key={i} className="h-32 bg-muted rounded-xl animate-pulse" />)}</div>
       ) : filtered.length === 0 ? (
         <EmptyState icon={<FolderOpen size={28} />} title="No documents" action={<Button onClick={() => setShowModal(true)}><Plus size={16} /> Add Document</Button>} />
       ) : (
@@ -91,14 +91,14 @@ export function DocumentsPage() {
           {filtered.map((doc) => (
             <Card key={doc.id} hover className="p-4 group">
               <div className="flex items-center justify-between mb-3">
-                <div className="w-10 h-10 rounded-lg bg-purple/10 flex items-center justify-center text-purple-light">{TYPE_ICONS[doc.type] || <File size={18} />}</div>
+                <div className="w-10 h-10 rounded-lg bg-purple-50 flex items-center justify-center text-purple-600">{TYPE_ICONS[doc.type] || <File size={18} />}</div>
                 <Badge variant="neutral">{doc.type}</Badge>
               </div>
-              <p className="text-sm font-medium text-white truncate">{doc.name}</p>
-              <p className="text-xs text-white/30 mt-1">{doc.client?.company_name || 'No client'}</p>
-              <p className="text-xs text-white/30">{formatDate(doc.created_at)}</p>
+              <p className="text-sm font-medium text-primary truncate">{doc.name}</p>
+              <p className="text-xs text-tertiary mt-1">{doc.client?.company_name || 'No client'}</p>
+              <p className="text-xs text-tertiary">{formatDate(doc.created_at)}</p>
               {doc.file_url && (
-                <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="mt-2 flex items-center gap-1 text-xs text-purple-light hover:underline opacity-0 group-hover:opacity-100 transition-opacity">
+                <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="mt-2 flex items-center gap-1 text-xs text-purple-600 hover:underline opacity-0 group-hover:opacity-100 transition-opacity">
                   <Download size={12} /> Download
                 </a>
               )}

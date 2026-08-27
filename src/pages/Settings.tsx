@@ -76,12 +76,12 @@ export function SettingsPage() {
     <div className="p-6 space-y-6 animate-fade-in max-w-[1000px] mx-auto">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
-        <p className="text-sm text-white/40 mt-0.5">Manage your account and team</p>
+        <p className="text-sm text-tertiary mt-0.5">Manage your account and team</p>
       </div>
 
-      <div className="flex gap-1 border-b border-ink-border">
+      <div className="flex gap-1 border-b border-line">
         {tabs.map((t) => (
-          <button key={t.id} onClick={() => setTab(t.id)} className={cn('flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px', tab === t.id ? 'border-purple-light text-white' : 'border-transparent text-white/40 hover:text-white/70')}>
+          <button key={t.id} onClick={() => setTab(t.id)} className={cn('flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px', tab === t.id ? 'border-purple-600 text-primary' : 'border-transparent text-tertiary hover:text-secondary')}>
             {t.icon} {t.label}
           </button>
         ))}
@@ -92,8 +92,8 @@ export function SettingsPage() {
           <div className="flex items-center gap-4">
             <Avatar name={form.full_name} src={form.avatar_url} size="xl" />
             <div>
-              <p className="text-sm font-medium text-white">{form.full_name}</p>
-              <p className="text-xs text-white/40">{form.email}</p>
+              <p className="text-sm font-medium text-primary">{form.full_name}</p>
+              <p className="text-xs text-tertiary">{form.email}</p>
               <Badge variant="purple" className="mt-1">{profile ? ROLE_LABELS[profile.role] : ''}</Badge>
             </div>
           </div>
@@ -112,16 +112,16 @@ export function SettingsPage() {
           <CardHeader><CardTitle>Team Members</CardTitle></CardHeader>
           <CardBody>
             {loadingTeam ? (
-              <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-16 bg-white/5 rounded-lg animate-pulse" />)}</div>
+              <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-16 bg-muted rounded-lg animate-pulse" />)}</div>
             ) : (
-              <div className="divide-y divide-ink-border">
+              <div className="divide-y divide-line">
                 {team.map((m) => (
                   <div key={m.id} className="flex items-center justify-between py-4">
                     <div className="flex items-center gap-3">
                       <Avatar name={m.full_name} src={m.avatar_url} size="md" />
                       <div>
-                        <p className="text-sm font-medium text-white">{m.full_name}</p>
-                        <p className="text-xs text-white/40">{m.email}</p>
+                        <p className="text-sm font-medium text-primary">{m.full_name}</p>
+                        <p className="text-xs text-tertiary">{m.email}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
@@ -144,24 +144,24 @@ export function SettingsPage() {
           <Card className="p-6">
             <CardTitle>Security Settings</CardTitle>
             <div className="space-y-4 mt-4">
-              <div className="flex items-center justify-between p-3 rounded-lg bg-white/5">
+              <div className="flex items-center justify-between p-3 rounded-lg bg-muted">
                 <div className="flex items-center gap-3">
-                  <Lock size={18} className="text-white/40" />
-                  <div><p className="text-sm font-medium text-white">Password</p><p className="text-xs text-white/40">Last changed recently</p></div>
+                  <Lock size={18} className="text-tertiary" />
+                  <div><p className="text-sm font-medium text-primary">Password</p><p className="text-xs text-tertiary">Last changed recently</p></div>
                 </div>
                 <Button variant="outline" size="sm">Change Password</Button>
               </div>
-              <div className="flex items-center justify-between p-3 rounded-lg bg-white/5">
+              <div className="flex items-center justify-between p-3 rounded-lg bg-muted">
                 <div className="flex items-center gap-3">
-                  <Shield size={18} className="text-white/40" />
-                  <div><p className="text-sm font-medium text-white">Two-Factor Authentication</p><p className="text-xs text-white/40">Add an extra layer of security</p></div>
+                  <Shield size={18} className="text-tertiary" />
+                  <div><p className="text-sm font-medium text-primary">Two-Factor Authentication</p><p className="text-xs text-tertiary">Add an extra layer of security</p></div>
                 </div>
                 <Button variant="outline" size="sm">Enable 2FA</Button>
               </div>
-              <div className="flex items-center justify-between p-3 rounded-lg bg-white/5">
+              <div className="flex items-center justify-between p-3 rounded-lg bg-muted">
                 <div className="flex items-center gap-3">
-                  <Mail size={18} className="text-white/40" />
-                  <div><p className="text-sm font-medium text-white">Email Verification</p><p className="text-xs text-white/40">{profile?.email}</p></div>
+                  <Mail size={18} className="text-tertiary" />
+                  <div><p className="text-sm font-medium text-primary">Email Verification</p><p className="text-xs text-tertiary">{profile?.email}</p></div>
                 </div>
                 <Badge variant="success" dot>Verified</Badge>
               </div>
@@ -170,10 +170,10 @@ export function SettingsPage() {
           <Card className="p-6">
             <CardTitle>Audit & Compliance</CardTitle>
             <div className="grid grid-cols-2 gap-4 mt-4">
-              <div className="p-3 rounded-lg bg-white/5"><p className="text-sm font-medium text-white">GDPR Ready</p><p className="text-xs text-white/40 mt-1">Data protection compliant</p></div>
-              <div className="p-3 rounded-lg bg-white/5"><p className="text-sm font-medium text-white">POPIA Compliant</p><p className="text-xs text-white/40 mt-1">South African data protection</p></div>
-              <div className="p-3 rounded-lg bg-white/5"><p className="text-sm font-medium text-white">Encrypted Backups</p><p className="text-xs text-white/40 mt-1">Daily automatic backups</p></div>
-              <div className="p-3 rounded-lg bg-white/5"><p className="text-sm font-medium text-white">Session Logs</p><p className="text-xs text-white/40 mt-1">Login history tracked</p></div>
+              <div className="p-3 rounded-lg bg-muted"><p className="text-sm font-medium text-primary">GDPR Ready</p><p className="text-xs text-tertiary mt-1">Data protection compliant</p></div>
+              <div className="p-3 rounded-lg bg-muted"><p className="text-sm font-medium text-primary">POPIA Compliant</p><p className="text-xs text-tertiary mt-1">South African data protection</p></div>
+              <div className="p-3 rounded-lg bg-muted"><p className="text-sm font-medium text-primary">Encrypted Backups</p><p className="text-xs text-tertiary mt-1">Daily automatic backups</p></div>
+              <div className="p-3 rounded-lg bg-muted"><p className="text-sm font-medium text-primary">Session Logs</p><p className="text-xs text-tertiary mt-1">Login history tracked</p></div>
             </div>
           </Card>
         </div>
@@ -184,11 +184,11 @@ export function SettingsPage() {
           <CardTitle>Notification Preferences</CardTitle>
           <div className="space-y-3 mt-4">
             {['Email notifications', 'SMS notifications', 'WhatsApp notifications', 'Browser push notifications', 'In-app notifications'].map((n, i) => (
-              <div key={n} className="flex items-center justify-between p-3 rounded-lg bg-white/5">
-                <span className="text-sm text-white/70">{n}</span>
+              <div key={n} className="flex items-center justify-between p-3 rounded-lg bg-muted">
+                <span className="text-sm text-secondary">{n}</span>
                 <label className="relative inline-flex items-center cursor-pointer">
                   <input type="checkbox" defaultChecked={i < 3} className="sr-only peer" />
-                  <div className="w-10 h-5 bg-white/10 rounded-full peer peer-checked:bg-purple transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-5" />
+                  <div className="w-10 h-5 bg-muted rounded-full peer peer-checked:bg-purple transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-5" />
                 </label>
               </div>
             ))}
