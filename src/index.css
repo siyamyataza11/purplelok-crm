@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    border-color: #E7E9EE;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: #F7F8FA;
+    color: #16181D;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  ::selection {
+    background: rgba(109, 60, 245, 0.15);
+    color: #16181D;
+  }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #D0D5DD; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #98A2B3; }
+}
+
+@layer components {
+  .card { @apply bg-surface border border-line rounded-xl; }
+  .card-hover { @apply transition-all duration-200 hover:border-[#D0D5DD] hover:shadow-sm; }
+  .btn-primary { @apply bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition-colors duration-150; }
+  .btn-ghost { @apply text-secondary hover:text-primary hover:bg-muted rounded-lg transition-colors duration-150; }
+  .btn-outline { @apply bg-surface border border-line text-primary hover:bg-muted hover:border-[#D0D5DD] rounded-lg transition-colors duration-150; }
+  .input-field { @apply w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-primary placeholder-tertiary focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/15 transition-colors duration-150; }
+  .label-text { @apply text-xs font-medium text-secondary; }
+}
+
+@layer utilities {
+  .animate-fade-in { animation: fadeIn 0.2s ease-out; }
+  .animate-slide-up { animation: slideUp 0.3s ease-out; }
+  .animate-slide-in-right { animation: slideInRight 0.25s ease-out; }
+  .animate-scale-in { animation: scaleIn 0.15s ease-out; }
+}
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideInRight { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes scaleIn { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
