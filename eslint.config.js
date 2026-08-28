@@ -24,5 +24,14 @@ export default tseslint.config(
         { allowConstantExport: true },
       ],
     },
-  }
+  },
+  {
+    files: ['scripts/**/*.ts'],
+    languageOptions: {
+      globals: globals.node,
+    },
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 );
