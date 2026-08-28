@@ -25,8 +25,11 @@ import {
   Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useOrganization } from '@/context/OrganizationContext';
+import type { PermissionKey } from '@/lib/authorization';
 
 export function Dashboard() {
+  const { hasPermission, hasAllPermissions } = useOrganization();
   const d = useDashboardData();
   const m = computeMetrics(d);
 
@@ -43,11 +46,11 @@ export function Dashboard() {
     );
   }
 
-  const metrics = [
-    { label: 'Monthly Revenue', value: formatCurrency(m.monthlyRevenue), sub: 'This month', icon: <TrendingUp size={18} />, accent: 'text-purple-600', bg: 'bg-purple-50' },
-    { label: 'Outstanding', value: formatCurrency(m.outstandingPayments), sub: 'Awaiting payment', icon: <AlertCircle size={18} />, accent: 'text-orange-600', bg: 'bg-orange-50' },
-    { label: 'Active Projects', value: formatNumber(m.activeProjects), sub: 'In progress', icon: <Briefcase size={18} />, accent: 'text-blue-600', bg: 'bg-blue-50' },
-    { label: 'Tasks Due Today', value: formatNumber(m.tasksDueToday), sub: 'Needs attention', icon: <Zap size={18} />, accent: 'text-orange-600', bg: 'bg-orange-50' },
+  const metrics: Array<{ label: string; value: string; sub: string; icon: React.ReactNode; accent: string; bg: string; permission: PermissionKey }> = [
+    { label: 'Monthly Revenue', value: formatCurrency(m.monthlyRevenue), sub: 'This month', icon: <TrendingUp size={18} />, accent: 'text-purple-600', bg: 'bg-purple-50', permission: 'payments.read' },
+    { label: 'Outstanding', value: formatCurrency(m.outstandingPayments), sub: 'Awaiting payment', icon: <AlertCircle size={18} />, accent: 'text-orange-600', bg: 'bg-orange-50', permission: 'invoices.read' },
+    { label: 'Active Projects', value: formatNumber(m.activeProjects), sub: 'In progress', icon: <Briefcase size={18} />, accent: 'text-blue-600', bg: 'bg-blue-50', permission: 'projects.read' },
+    { label: 'Tasks Due Today', value: formatNumber(m.tasksDueToday), sub: 'Needs attention', icon: <Zap size={18} />, accent: 'text-orange-600', bg: 'bg-orange-50', permission: 'tasks.read' },
   ];
 
   // Cash flow: last 6 months from payments
@@ -99,7 +102,7 @@ export function Dashboard() {
 
       {/* Metrics grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-        {metrics.map((metric) => (
+        {metrics.filter((metric) => hasPermission(metric.permission)).map((metric) => (
           <Card key={metric.label} hover className="p-4">
             <div className="flex items-start justify-between mb-3">
               <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center', metric.bg, metric.accent)}>
@@ -124,7 +127,7 @@ export function Dashboard() {
             <p className="text-lg font-bold">{m.upcomingMeetings}</p>
           </div>
         </Card>
-        <Card className="p-4 flex items-center gap-3">
+        {hasPermission('clients.read') && <Card className="p-4 flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-green-50 flex items-center justify-center text-green-600">
             <Star size={18} />
           </div>
@@ -132,8 +135,8 @@ export function Dashboard() {
             <p className="text-xs text-tertiary">Client Satisfaction</p>
             <p className="text-lg font-bold">{m.avgSatisfaction.toFixed(1)}/5</p>
           </div>
-        </Card>
-        <Card className="p-4 flex items-center gap-3">
+        </Card>}
+        {hasPermission('leads.read') && <Card className="p-4 flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
             <Target size={18} />
           </div>
@@ -141,8 +144,8 @@ export function Dashboard() {
             <p className="text-xs text-tertiary">Lead Conversion</p>
             <p className="text-lg font-bold">{m.leadConversion.toFixed(1)}%</p>
           </div>
-        </Card>
-        <Card className="p-4 flex items-center gap-3">
+        </Card>}
+        {hasPermission('clients.read') && <Card className="p-4 flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-orange-50 flex items-center justify-center text-orange-600">
             <Users size={18} />
           </div>
@@ -150,12 +153,12 @@ export function Dashboard() {
             <p className="text-xs text-tertiary">Total Clients</p>
             <p className="text-lg font-bold">{d.clients.length}</p>
           </div>
-        </Card>
+        </Card>}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Cash flow */}
-        <Card className="lg:col-span-2">
+        {hasPermission('payments.read') && <Card className="lg:col-span-2">
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle>Cash Flow Overview</CardTitle>
@@ -181,10 +184,10 @@ export function Dashboard() {
               ))}
             </div>
           </CardBody>
-        </Card>
+        </Card>}
 
         {/* Project Health */}
-        <Card>
+        {hasPermission('projects.read') && <Card>
           <CardHeader>
             <CardTitle>Project Health</CardTitle>
           </CardHeader>
@@ -206,7 +209,7 @@ export function Dashboard() {
               ))}
             </div>
           </CardBody>
-        </Card>
+        </Card>}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -240,7 +243,7 @@ export function Dashboard() {
         </Card>
 
         {/* Upcoming meetings */}
-        <Card>
+        {hasAllPermissions(['clients.read', 'invoices.read']) && <Card>
           <CardHeader>
             <CardTitle>Upcoming Meetings</CardTitle>
           </CardHeader>
@@ -267,12 +270,12 @@ export function Dashboard() {
               </div>
             )}
           </CardBody>
-        </Card>
+        </Card>}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Top clients */}
-        <Card>
+        {hasPermission('payments.read') && <Card>
           <CardHeader>
             <CardTitle>Top Clients</CardTitle>
           </CardHeader>
@@ -295,7 +298,7 @@ export function Dashboard() {
               </div>
             )}
           </CardBody>
-        </Card>
+        </Card>}
 
         {/* Recent payments */}
         <Card>

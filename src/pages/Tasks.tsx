@@ -12,6 +12,9 @@ import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { formatDate, cn, isToday, isOverdue } from '@/lib/utils';
 import { Plus, CheckSquare, Check, Clock, Flag, User } from 'lucide-react';
+import { PermissionGate } from '@/components/auth/PermissionGate';
+import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { useOrganization } from '@/context/OrganizationContext';
 
 const STATUS_COLS: { id: TaskStatus; label: string; color: string }[] = [
   { id: 'todo', label: 'To Do', color: 'border-l-gray-400' },
@@ -30,6 +33,7 @@ const PRIORITY_CONFIG: Record<TaskPriority, { variant: 'neutral' | 'info' | 'war
 export function TasksPage() {
   const { profile } = useAuth();
   const { add } = useToast();
+  const { hasPermission } = useOrganization();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -71,6 +75,7 @@ export function TasksPage() {
   }, [filtered]);
 
   async function moveTask(task: Task, status: TaskStatus) {
+    if (!hasPermission(ACTION_PERMISSIONS.tasksWrite)) return;
     await supabase.from('tasks').update({ status }).eq('id', task.id);
     setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, status } : t)));
     add('success', 'Task updated');
@@ -83,7 +88,9 @@ export function TasksPage() {
           <h1 className="text-2xl font-bold tracking-tight">Tasks</h1>
           <p className="text-sm text-tertiary mt-0.5">{tasks.length} total tasks</p>
         </div>
-        <Button onClick={() => setShowModal(true)}><Plus size={16} /> New Task</Button>
+        <PermissionGate permission={ACTION_PERMISSIONS.tasksWrite}>
+          <Button onClick={() => setShowModal(true)}><Plus size={16} /> New Task</Button>
+        </PermissionGate>
       </div>
 
       <div className="flex gap-2">
@@ -113,12 +120,12 @@ export function TasksPage() {
                   byStatus[col.id].map((t) => (
                     <div key={t.id} className="card p-3 group">
                       <div className="flex items-start gap-2 mb-2">
-                        <button
+                        {hasPermission(ACTION_PERMISSIONS.tasksWrite) && <button
                           onClick={() => moveTask(t, t.status === 'done' ? 'todo' : 'done')}
                           className={cn('w-4 h-4 rounded border-2 flex items-center justify-center mt-0.5 shrink-0 transition-colors', t.status === 'done' ? 'bg-green-500 border-green-500' : 'border-line hover:border-purple-600')}
                         >
                           {t.status === 'done' && <Check size={10} className="text-white" />}
-                        </button>
+                        </button>}
                         <p className={cn('text-sm flex-1', t.status === 'done' ? 'text-tertiary line-through' : 'text-primary')}>{t.title}</p>
                       </div>
                       {t.description && <p className="text-xs text-tertiary mb-2 pl-6">{t.description}</p>}
@@ -136,13 +143,13 @@ export function TasksPage() {
                           <span className="text-xs text-tertiary">{t.assigned_to_profile.full_name}</span>
                         </div>
                       )}
-                      <div className="flex gap-1 mt-2 pl-6 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {hasPermission(ACTION_PERMISSIONS.tasksWrite) && <div className="flex gap-1 mt-2 pl-6 opacity-0 group-hover:opacity-100 transition-opacity">
                         {t.status !== 'done' && (
                           <button onClick={() => moveTask(t, 'in_progress')} className="text-[10px] px-2 py-0.5 rounded bg-muted text-secondary hover:text-primary">Start</button>
                         )}
                         {t.status === 'in_progress' && <button onClick={() => moveTask(t, 'review')} className="text-[10px] px-2 py-0.5 rounded bg-muted text-secondary hover:text-primary">Review</button>}
                         {t.status === 'review' && <button onClick={() => moveTask(t, 'done')} className="text-[10px] px-2 py-0.5 rounded bg-muted text-secondary hover:text-primary">Complete</button>}
-                      </div>
+                      </div>}
                     </div>
                   ))
                 )}
@@ -152,7 +159,7 @@ export function TasksPage() {
         </div>
       )}
 
-      <TaskModal open={showModal} onClose={() => setShowModal(false)} profiles={profiles} clients={clients} projects={projects} onSaved={() => { setShowModal(false); load(); }} />
+      <TaskModal open={showModal && hasPermission(ACTION_PERMISSIONS.tasksWrite)} onClose={() => setShowModal(false)} profiles={profiles} clients={clients} projects={projects} onSaved={() => { setShowModal(false); load(); }} />
     </div>
   );
 }

@@ -11,6 +11,9 @@ import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { formatDate, cn } from '@/lib/utils';
 import { Plus, FolderOpen, File, FileText, Image, Video, Upload, Search, Download } from 'lucide-react';
+import { PermissionGate } from '@/components/auth/PermissionGate';
+import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { useOrganization } from '@/context/OrganizationContext';
 
 const TYPE_ICONS: Record<string, React.ReactNode> = {
   file: <File size={18} />,
@@ -27,6 +30,7 @@ const TYPE_ICONS: Record<string, React.ReactNode> = {
 export function DocumentsPage() {
   const { profile } = useAuth();
   const { add } = useToast();
+  const { hasPermission } = useOrganization();
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,7 +64,9 @@ export function DocumentsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Documents</h1>
           <p className="text-sm text-tertiary mt-0.5">{documents.length} files</p>
         </div>
-        <Button onClick={() => setShowModal(true)}><Plus size={16} /> Add Document</Button>
+        <PermissionGate permission={ACTION_PERMISSIONS.documentsWrite}>
+          <Button onClick={() => setShowModal(true)}><Plus size={16} /> Add Document</Button>
+        </PermissionGate>
       </div>
 
       <div className="flex gap-3">
@@ -85,7 +91,7 @@ export function DocumentsPage() {
       {loading ? (
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">{Array.from({ length: 12 }).map((_, i) => <div key={i} className="h-32 bg-muted rounded-xl animate-pulse" />)}</div>
       ) : filtered.length === 0 ? (
-        <EmptyState icon={<FolderOpen size={28} />} title="No documents" action={<Button onClick={() => setShowModal(true)}><Plus size={16} /> Add Document</Button>} />
+        <EmptyState icon={<FolderOpen size={28} />} title="No documents" action={hasPermission(ACTION_PERMISSIONS.documentsWrite) ? <Button onClick={() => setShowModal(true)}><Plus size={16} /> Add Document</Button> : undefined} />
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
           {filtered.map((doc) => (
@@ -107,7 +113,7 @@ export function DocumentsPage() {
         </div>
       )}
 
-      <DocumentModal open={showModal} onClose={() => setShowModal(false)} clients={clients} onSaved={() => { setShowModal(false); load(); }} />
+      <DocumentModal open={showModal && hasPermission(ACTION_PERMISSIONS.documentsWrite)} onClose={() => setShowModal(false)} clients={clients} onSaved={() => { setShowModal(false); load(); }} />
     </div>
   );
 }

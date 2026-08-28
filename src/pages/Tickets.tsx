@@ -12,6 +12,9 @@ import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { timeAgo, formatDate, cn, generateNumber } from '@/lib/utils';
 import { Plus, LifeBuoy, ArrowLeft, Send, Star, Clock } from 'lucide-react';
+import { PermissionGate } from '@/components/auth/PermissionGate';
+import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { useOrganization } from '@/context/OrganizationContext';
 
 const PRIORITY_CONFIG = {
   low: { variant: 'neutral' as const, label: 'Low' },
@@ -30,6 +33,7 @@ const STATUS_CONFIG = {
 export function TicketsPage() {
   const { profile } = useAuth();
   const { add } = useToast();
+  const { hasPermission } = useOrganization();
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -57,6 +61,7 @@ export function TicketsPage() {
   const filtered = tickets.filter((t) => statusFilter === 'all' || t.status === statusFilter);
 
   async function updateStatus(ticket: Ticket, status: TicketStatus) {
+    if (!hasPermission(ACTION_PERMISSIONS.ticketsWrite)) return;
     await supabase.from('tickets').update({ status }).eq('id', ticket.id);
     setTickets((prev) => prev.map((t) => (t.id === ticket.id ? { ...t, status } : t)));
     if (selected?.id === ticket.id) setSelected({ ...selected, status });
@@ -74,7 +79,9 @@ export function TicketsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Support Desk</h1>
           <p className="text-sm text-tertiary mt-0.5">{tickets.filter((t) => t.status === 'open').length} open tickets</p>
         </div>
-        <Button onClick={() => setShowModal(true)}><Plus size={16} /> New Ticket</Button>
+        <PermissionGate permission={ACTION_PERMISSIONS.ticketsWrite}>
+          <Button onClick={() => setShowModal(true)}><Plus size={16} /> New Ticket</Button>
+        </PermissionGate>
       </div>
 
       <div className="flex gap-3">
@@ -90,7 +97,7 @@ export function TicketsPage() {
       {loading ? (
         <div className="space-y-3">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 bg-muted rounded-xl animate-pulse" />)}</div>
       ) : filtered.length === 0 ? (
-        <EmptyState icon={<LifeBuoy size={28} />} title="No tickets" action={<Button onClick={() => setShowModal(true)}><Plus size={16} /> New Ticket</Button>} />
+        <EmptyState icon={<LifeBuoy size={28} />} title="No tickets" action={hasPermission(ACTION_PERMISSIONS.ticketsWrite) ? <Button onClick={() => setShowModal(true)}><Plus size={16} /> New Ticket</Button> : undefined} />
       ) : (
         <Card>
           <div className="divide-y divide-line">
@@ -114,7 +121,7 @@ export function TicketsPage() {
         </Card>
       )}
 
-      <TicketModal open={showModal} onClose={() => setShowModal(false)} clients={clients} profiles={profiles} onSaved={() => { setShowModal(false); load(); }} />
+      <TicketModal open={showModal && hasPermission(ACTION_PERMISSIONS.ticketsWrite)} onClose={() => setShowModal(false)} clients={clients} profiles={profiles} onSaved={() => { setShowModal(false); load(); }} />
     </div>
   );
 }
@@ -179,6 +186,7 @@ function TicketModal({ open, onClose, clients, profiles, onSaved }: { open: bool
 function TicketDetail({ ticket, profiles, onBack, onUpdated, onUpdateStatus }: { ticket: Ticket; profiles: Profile[]; onBack: () => void; onUpdated: () => void; onUpdateStatus: (t: Ticket, s: TicketStatus) => void }) {
   const { profile } = useAuth();
   const { add } = useToast();
+  const { hasPermission } = useOrganization();
   const [messages, setMessages] = useState<TicketMessage[]>([]);
   const [newMsg, setNewMsg] = useState('');
   const [internal, setInternal] = useState(false);
@@ -192,6 +200,7 @@ function TicketDetail({ ticket, profiles, onBack, onUpdated, onUpdateStatus }: {
   }, [ticket.id]);
 
   async function sendMsg() {
+    if (!hasPermission(ACTION_PERMISSIONS.ticketsWrite)) return;
     if (!newMsg.trim()) return;
     const { data, error } = await supabase.from('ticket_messages').insert({
       ticket_id: ticket.id,
@@ -219,7 +228,7 @@ function TicketDetail({ ticket, profiles, onBack, onUpdated, onUpdateStatus }: {
         </div>
       </div>
 
-      <div className="flex gap-2">
+      {hasPermission(ACTION_PERMISSIONS.ticketsWrite) && <div className="flex gap-2">
         {ticket.status !== 'in_progress' && ticket.status !== 'closed' && (
           <Button variant="subtle" size="sm" onClick={() => onUpdateStatus(ticket, 'in_progress')}>Mark In Progress</Button>
         )}
@@ -229,7 +238,7 @@ function TicketDetail({ ticket, profiles, onBack, onUpdated, onUpdateStatus }: {
         {ticket.status !== 'closed' && (
           <Button variant="ghost" size="sm" onClick={() => onUpdateStatus(ticket, 'closed')}>Close Ticket</Button>
         )}
-      </div>
+      </div>}
 
       {ticket.description && (
         <Card className="p-5">
@@ -260,7 +269,7 @@ function TicketDetail({ ticket, profiles, onBack, onUpdated, onUpdateStatus }: {
         )}
       </Card>
 
-      <Card className="p-4">
+      {hasPermission(ACTION_PERMISSIONS.ticketsWrite) && <Card className="p-4">
         <div className="flex gap-3 items-end">
           <div className="flex-1">
             <Textarea label="" rows={2} value={newMsg} onChange={(e) => setNewMsg(e.target.value)} placeholder="Type a reply..." />
@@ -271,7 +280,7 @@ function TicketDetail({ ticket, profiles, onBack, onUpdated, onUpdateStatus }: {
           </label>
           <Button onClick={sendMsg}><Send size={16} /></Button>
         </div>
-      </Card>
+      </Card>}
     </div>
   );
 }

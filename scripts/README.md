@@ -1,9 +1,14 @@
 # Server-side provisioning
 
-`provision-purplelok.ts` provisions the first PURPLELOK organization, its six
-system roles, role-permission mappings, and the approved owner membership. It
-does not modify CRM domain data, `profiles.role`, RLS policies, Storage, the
-bootstrap admin, or platform administrators.
+The provisioning commands use one tenant-specification engine for both the
+real PURPLELOK organization and PURPLELOK Demo. The engine validates identities,
+creates only missing compatible organization/RBAC records, and refuses to
+silently repair conflicting authority.
+
+The scripts do not modify CRM domain data, `profiles.role`, RLS policies,
+Storage, or platform administrators. PURPLELOK provisions its verified owner;
+PURPLELOK Demo provisions only the verified bootstrap identity as Demo
+Administrator with the Admin organization role.
 
 ## Credential
 
@@ -28,23 +33,32 @@ Dry run is the default and starts a PostgreSQL read-only transaction:
 ```sh
 npm run provision:purplelok
 npm run provision:purplelok -- --dry-run
+npm run provision:purplelok-demo
+npm run provision:purplelok-demo -- --dry-run
 ```
 
 With Node's environment-file support:
 
 ```sh
 node --env-file=.env.provisioning.local --import tsx scripts/provision-purplelok.ts --dry-run
+node --env-file=.env.provisioning.local --import tsx scripts/provision-purplelok-demo.ts --dry-run
 ```
 
 Writes require the explicit flag:
 
 ```sh
 node --env-file=.env.provisioning.local --import tsx scripts/provision-purplelok.ts --apply
+node --env-file=.env.provisioning.local --import tsx scripts/provision-purplelok-demo.ts --apply
 ```
 
-`--apply` runs in a serializable transaction and verifies the final state before
-commit. Any conflict or failed verification rolls back the transaction. Review
-the dry-run plan before applying.
+`--apply` runs in a serializable transaction, takes a tenant-scoped advisory
+lock, repeats validation after acquiring the lock, and verifies a zero-change
+final plan before commit. Any conflict or failed verification rolls back the
+transaction. Review the dry-run plan before applying.
+
+The two specifications enforce mutual membership isolation: the bootstrap
+identity may not belong to real PURPLELOK, and the real owner may not belong to
+PURPLELOK Demo. Both also require `platform_admins` to remain empty.
 
 The Client role is created but deliberately left unassigned. Its permissions
 are not production-safe until client-specific row-level scope is implemented.

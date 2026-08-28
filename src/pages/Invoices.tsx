@@ -11,11 +11,15 @@ import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { formatCurrency, formatDate, generateNumber, cn, isOverdue } from '@/lib/utils';
 import { Plus, Receipt, Trash2, ArrowLeft, DollarSign, Send, Clock, AlertCircle } from 'lucide-react';
+import { PermissionGate } from '@/components/auth/PermissionGate';
+import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { useOrganization } from '@/context/OrganizationContext';
 
 type View = 'list' | 'detail' | 'create';
 
 export function InvoicesPage() {
   const { add } = useToast();
+  const { hasPermission, hasAllPermissions } = useOrganization();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -40,13 +44,13 @@ export function InvoicesPage() {
 
   // Auto-flag overdue
   useEffect(() => {
-    if (invoices.length === 0) return;
+    if (invoices.length === 0 || !hasPermission(ACTION_PERMISSIONS.invoicesApprove)) return;
     invoices.forEach(async (inv) => {
       if (inv.status === 'sent' && inv.due_date && isOverdue(inv.due_date)) {
         await supabase.from('invoices').update({ status: 'overdue' }).eq('id', inv.id);
       }
     });
-  }, [invoices]);
+  }, [hasPermission, invoices]);
 
   const filtered = useMemo(() => invoices.filter((i) => statusFilter === 'all' || i.status === statusFilter), [invoices, statusFilter]);
 
@@ -57,6 +61,7 @@ export function InvoicesPage() {
   const totalOverdue = invoices.filter((i) => i.status === 'overdue').reduce((s, i) => s + i.balance, 0);
 
   async function recordPayment(inv: Invoice, amount: number, method: string, reference: string) {
+    if (!hasAllPermissions([ACTION_PERMISSIONS.paymentsRecord, ACTION_PERMISSIONS.invoicesWrite])) return;
     const { error } = await supabase.from('payments').insert({
       invoice_id: inv.id,
       client_id: inv.client_id,
@@ -76,6 +81,7 @@ export function InvoicesPage() {
   }
 
   async function sendInvoice(inv: Invoice) {
+    if (!hasPermission(ACTION_PERMISSIONS.invoicesApprove)) return;
     await supabase.from('invoices').update({ status: 'sent' }).eq('id', inv.id);
     add('success', 'Invoice sent to client');
     load();
@@ -86,6 +92,7 @@ export function InvoicesPage() {
   }
 
   if (view === 'create') {
+    if (!hasPermission(ACTION_PERMISSIONS.invoicesWrite)) return null;
     return <InvoiceCreate clients={clients} onBack={() => setView('list')} onCreated={() => { setView('list'); load(); }} />;
   }
 
@@ -96,7 +103,9 @@ export function InvoicesPage() {
           <h1 className="text-2xl font-bold tracking-tight">Invoices</h1>
           <p className="text-sm text-tertiary mt-0.5">{invoices.length} total invoices</p>
         </div>
-        <Button onClick={() => setView('create')}><Plus size={16} /> New Invoice</Button>
+        <PermissionGate permission={ACTION_PERMISSIONS.invoicesWrite}>
+          <Button onClick={() => setView('create')}><Plus size={16} /> New Invoice</Button>
+        </PermissionGate>
       </div>
 
       {/* Summary cards */}
@@ -136,7 +145,7 @@ export function InvoicesPage() {
       {loading ? (
         <div className="space-y-3">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 bg-muted rounded-xl animate-pulse" />)}</div>
       ) : filtered.length === 0 ? (
-        <EmptyState icon={<Receipt size={28} />} title="No invoices yet" action={<Button onClick={() => setView('create')}><Plus size={16} /> New Invoice</Button>} />
+        <EmptyState icon={<Receipt size={28} />} title="No invoices yet" action={hasPermission(ACTION_PERMISSIONS.invoicesWrite) ? <Button onClick={() => setView('create')}><Plus size={16} /> New Invoice</Button> : undefined} />
       ) : (
         <Card>
           <div className="divide-y divide-line">
@@ -168,7 +177,7 @@ export function InvoicesPage() {
         </Card>
       )}
 
-      {showPayment && payInvoice && (
+      {showPayment && payInvoice && hasAllPermissions([ACTION_PERMISSIONS.paymentsRecord, ACTION_PERMISSIONS.invoicesWrite]) && (
         <PaymentModal invoice={payInvoice} onClose={() => setShowPayment(false)} onPay={recordPayment} />
       )}
     </div>
@@ -330,18 +339,22 @@ function InvoiceDetail({ invoice, onBack, onPay, onSend, onUpdated }: {
 }) {
   const [items, setItems] = useState<InvoiceItem[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const { hasPermission, hasAllPermissions } = useOrganization();
 
   useEffect(() => {
     async function load() {
+      const paymentsQuery = hasPermission(ACTION_PERMISSIONS.paymentsRead)
+        ? supabase.from('payments').select('*').eq('invoice_id', invoice.id).order('paid_at', { ascending: false })
+        : Promise.resolve({ data: [] });
       const [iRes, pRes] = await Promise.all([
         supabase.from('invoice_items').select('*').eq('invoice_id', invoice.id),
-        supabase.from('payments').select('*').eq('invoice_id', invoice.id).order('paid_at', { ascending: false }),
+        paymentsQuery,
       ]);
       setItems((iRes.data as InvoiceItem[]) ?? []);
       setPayments((pRes.data as Payment[]) ?? []);
     }
     load();
-  }, [invoice.id]);
+  }, [hasPermission, invoice.id]);
 
   return (
     <div className="p-6 space-y-6 animate-fade-in max-w-[1000px] mx-auto">
@@ -356,8 +369,8 @@ function InvoiceDetail({ invoice, onBack, onPay, onSend, onUpdated }: {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {invoice.status === 'draft' && <Button onClick={() => onSend(invoice)}><Send size={14} /> Send Invoice</Button>}
-        {invoice.balance > 0 && invoice.status !== 'draft' && <Button onClick={onPay}><DollarSign size={14} /> Record Payment</Button>}
+        {invoice.status === 'draft' && hasPermission(ACTION_PERMISSIONS.invoicesApprove) && <Button onClick={() => onSend(invoice)}><Send size={14} /> Send Invoice</Button>}
+        {invoice.balance > 0 && invoice.status !== 'draft' && hasAllPermissions([ACTION_PERMISSIONS.paymentsRecord, ACTION_PERMISSIONS.invoicesWrite]) && <Button onClick={onPay}><DollarSign size={14} /> Record Payment</Button>}
       </div>
 
       <Card className="p-6">
@@ -406,7 +419,7 @@ function InvoiceDetail({ invoice, onBack, onPay, onSend, onUpdated }: {
         </div>
       </Card>
 
-      {payments.length > 0 && (
+      {hasPermission(ACTION_PERMISSIONS.paymentsRead) && payments.length > 0 && (
         <Card className="p-6">
           <h3 className="text-sm font-semibold mb-4">Payment History</h3>
           <div className="space-y-2">

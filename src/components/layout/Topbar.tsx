@@ -1,22 +1,25 @@
 import { useState, useRef, useEffect } from 'react';
 import { Search, Bell, Menu, ChevronDown, LogOut, User as UserIcon, Settings as SettingsIcon, Check } from 'lucide-react';
-import { useAuth, ROLE_LABELS } from '@/context/AuthContext';
+import { useAuth } from '@/context/AuthContext';
+import { useOrganization } from '@/context/OrganizationContext';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
 import type { Notification } from '@/types';
 import { timeAgo } from '@/lib/utils';
+import { canAccessPage, type AppPage } from '@/lib/authorization';
 
 interface TopbarProps {
   onToggleSidebar: () => void;
-  onNavigate: (id: string) => void;
+  onNavigate: (id: AppPage) => void;
   searchQuery: string;
   onSearchChange: (q: string) => void;
 }
 
 export function Topbar({ onToggleSidebar, onNavigate, searchQuery, onSearchChange }: TopbarProps) {
   const { profile, signOut } = useAuth();
+  const { currentOrganization, membership, roles, permissions } = useOrganization();
   const [notifOpen, setNotifOpen] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -68,8 +71,8 @@ export function Topbar({ onToggleSidebar, onNavigate, searchQuery, onSearchChang
         {searchOpen && searchQuery && (
           <div className="absolute top-full mt-1 w-full bg-surface rounded-lg shadow-lg border border-line p-1.5 animate-scale-in">
             <p className="px-3 py-2 text-xs text-tertiary">Search "{searchQuery}" across the CRM</p>
-            <button onClick={() => { onNavigate('clients'); setSearchOpen(false); }} className="w-full text-left px-3 py-1.5 rounded-md hover:bg-muted text-sm text-secondary flex items-center gap-2"><Search size={13} /> Search in Clients</button>
-            <button onClick={() => { onNavigate('projects'); setSearchOpen(false); }} className="w-full text-left px-3 py-1.5 rounded-md hover:bg-muted text-sm text-secondary flex items-center gap-2"><Search size={13} /> Search in Projects</button>
+            {canAccessPage('clients', permissions) && <button onClick={() => { onNavigate('clients'); setSearchOpen(false); }} className="w-full text-left px-3 py-1.5 rounded-md hover:bg-muted text-sm text-secondary flex items-center gap-2"><Search size={13} /> Search in Clients</button>}
+            {canAccessPage('projects', permissions) && <button onClick={() => { onNavigate('projects'); setSearchOpen(false); }} className="w-full text-left px-3 py-1.5 rounded-md hover:bg-muted text-sm text-secondary flex items-center gap-2"><Search size={13} /> Search in Projects</button>}
           </div>
         )}
       </div>
@@ -107,7 +110,7 @@ export function Topbar({ onToggleSidebar, onNavigate, searchQuery, onSearchChang
           <Avatar name={profile?.full_name} src={profile?.avatar_url} size="sm" />
           <div className="hidden sm:block text-left">
             <p className="text-sm font-medium text-primary leading-tight">{profile?.full_name || 'User'}</p>
-            <p className="text-[10px] text-tertiary">{profile ? ROLE_LABELS[profile.role] : ''}</p>
+            <p className="text-[10px] text-tertiary">{membership?.job_title || roles.map((role) => role.name).join(', ')}</p>
           </div>
           <ChevronDown size={14} className="text-tertiary" />
         </button>
@@ -116,11 +119,17 @@ export function Topbar({ onToggleSidebar, onNavigate, searchQuery, onSearchChang
             <div className="px-4 py-3 border-b border-line">
               <p className="text-sm font-medium text-primary">{profile?.full_name}</p>
               <p className="text-xs text-secondary">{profile?.email}</p>
-              <div className="mt-2"><Badge variant="purple">{profile ? ROLE_LABELS[profile.role] : ''}</Badge></div>
+              <p className="text-xs text-tertiary mt-1">{currentOrganization?.name}</p>
+              {membership?.job_title && <p className="text-xs text-secondary mt-1">{membership.job_title}</p>}
+              <div className="mt-2 flex flex-wrap gap-1">
+                {roles.map((role) => <Badge key={role.id} variant="purple">{role.name}</Badge>)}
+              </div>
             </div>
             <div className="p-1">
-              <button onClick={() => { onNavigate('settings'); setUserOpen(false); }} className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-md hover:bg-muted text-sm text-secondary"><UserIcon size={15} /> Profile</button>
-              <button onClick={() => { onNavigate('settings'); setUserOpen(false); }} className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-md hover:bg-muted text-sm text-secondary"><SettingsIcon size={15} /> Settings</button>
+              {canAccessPage('settings', permissions) && <>
+                <button onClick={() => { onNavigate('settings'); setUserOpen(false); }} className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-md hover:bg-muted text-sm text-secondary"><UserIcon size={15} /> Profile</button>
+                <button onClick={() => { onNavigate('settings'); setUserOpen(false); }} className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-md hover:bg-muted text-sm text-secondary"><SettingsIcon size={15} /> Settings</button>
+              </>}
               <button onClick={signOut} className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-md hover:bg-red-50 text-sm text-danger"><LogOut size={15} /> Sign out</button>
             </div>
           </div>

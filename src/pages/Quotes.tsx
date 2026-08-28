@@ -2,20 +2,23 @@ import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/components/ui/Toast';
-import type { Quote, QuoteItem, Client, Invoice, Project } from '@/types';
+import type { Quote, QuoteItem, Client, Invoice } from '@/types';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input, Textarea, Select } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
-import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { formatCurrency, formatDate, generateNumber, cn } from '@/lib/utils';
-import { Plus, FileText, Trash2, ArrowLeft, Receipt, Briefcase, Copy, Send, Check, X } from 'lucide-react';
+import { Plus, FileText, Trash2, ArrowLeft, Receipt, Briefcase, Copy, Send, Check } from 'lucide-react';
+import { PermissionGate } from '@/components/auth/PermissionGate';
+import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { useOrganization } from '@/context/OrganizationContext';
 
 type View = 'list' | 'detail' | 'create';
 
 export function QuotesPage() {
   const { add } = useToast();
+  const { hasPermission, hasAllPermissions } = useOrganization();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,6 +44,7 @@ export function QuotesPage() {
   }, [quotes, statusFilter]);
 
   async function convertToInvoice(q: Quote) {
+    if (!hasPermission(ACTION_PERMISSIONS.invoicesWrite)) return;
     const invoiceNumber = generateNumber('INV');
     const { data, error } = await supabase.from('invoices').insert({
       invoice_number: invoiceNumber,
@@ -70,14 +74,13 @@ export function QuotesPage() {
   }
 
   async function convertToProject(q: Quote) {
+    if (!hasAllPermissions([ACTION_PERMISSIONS.projectsWrite, ACTION_PERMISSIONS.quotesApprove])) return;
     const { error } = await supabase.from('projects').insert({
       name: q.title,
       client_id: q.client_id,
       type: 'other',
-      status: 'planning',
       budget: q.total,
       progress: 0,
-      health: 'on_track',
     });
     if (error) { add('error', error.message); return; }
     add('success', 'Project created from quote');
@@ -86,6 +89,7 @@ export function QuotesPage() {
   }
 
   async function duplicateQuote(q: Quote) {
+    if (!hasPermission(ACTION_PERMISSIONS.quotesWrite)) return;
     const newNum = generateNumber('QUO');
     const { data, error } = await supabase.from('quotes').insert({
       quote_number: newNum,
@@ -109,22 +113,25 @@ export function QuotesPage() {
   }
 
   async function sendQuote(q: Quote) {
+    if (!hasPermission(ACTION_PERMISSIONS.quotesWrite)) return;
     await supabase.from('quotes').update({ status: 'sent' }).eq('id', q.id);
     add('success', 'Quote marked as sent');
     load();
   }
 
   async function acceptQuote(q: Quote) {
+    if (!hasPermission(ACTION_PERMISSIONS.quotesApprove)) return;
     await supabase.from('quotes').update({ status: 'accepted', approved_by_client: true, approved_at: new Date().toISOString() }).eq('id', q.id);
     add('success', 'Quote accepted');
     load();
   }
 
   if (view === 'detail' && selected) {
-    return <QuoteDetail quote={selected} onBack={() => { setView('list'); setSelected(null); }} onUpdated={load} onConvertInvoice={convertToInvoice} onConvertProject={convertToProject} onDuplicate={duplicateQuote} onSend={sendQuote} onAccept={acceptQuote} />;
+    return <QuoteDetail quote={selected} onBack={() => { setView('list'); setSelected(null); }} onConvertInvoice={convertToInvoice} onConvertProject={convertToProject} onDuplicate={duplicateQuote} onSend={sendQuote} onAccept={acceptQuote} />;
   }
 
   if (view === 'create') {
+    if (!hasPermission(ACTION_PERMISSIONS.quotesWrite)) return null;
     return <QuoteCreate clients={clients} onBack={() => setView('list')} onCreated={() => { setView('list'); load(); }} />;
   }
 
@@ -135,7 +142,9 @@ export function QuotesPage() {
           <h1 className="text-2xl font-bold tracking-tight">Quotations</h1>
           <p className="text-sm text-tertiary mt-0.5">{quotes.length} total quotes</p>
         </div>
-        <Button onClick={() => setView('create')}><Plus size={16} /> New Quote</Button>
+        <PermissionGate permission={ACTION_PERMISSIONS.quotesWrite}>
+          <Button onClick={() => setView('create')}><Plus size={16} /> New Quote</Button>
+        </PermissionGate>
       </div>
 
       <div className="flex gap-3">
@@ -152,7 +161,7 @@ export function QuotesPage() {
       {loading ? (
         <div className="space-y-3">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 bg-muted rounded-xl animate-pulse" />)}</div>
       ) : filtered.length === 0 ? (
-        <EmptyState icon={<FileText size={28} />} title="No quotes yet" description="Create your first quotation" action={<Button onClick={() => setView('create')}><Plus size={16} /> New Quote</Button>} />
+        <EmptyState icon={<FileText size={28} />} title="No quotes yet" description="Create your first quotation" action={hasPermission(ACTION_PERMISSIONS.quotesWrite) ? <Button onClick={() => setView('create')}><Plus size={16} /> New Quote</Button> : undefined} />
       ) : (
         <Card>
           <div className="divide-y divide-line">
@@ -317,10 +326,9 @@ function QuoteCreate({ clients, onBack, onCreated }: { clients: Client[]; onBack
   );
 }
 
-function QuoteDetail({ quote, onBack, onUpdated, onConvertInvoice, onConvertProject, onDuplicate, onSend, onAccept }: {
+function QuoteDetail({ quote, onBack, onConvertInvoice, onConvertProject, onDuplicate, onSend, onAccept }: {
   quote: Quote;
   onBack: () => void;
-  onUpdated: () => void;
   onConvertInvoice: (q: Quote) => void;
   onConvertProject: (q: Quote) => void;
   onDuplicate: (q: Quote) => void;
@@ -328,7 +336,7 @@ function QuoteDetail({ quote, onBack, onUpdated, onConvertInvoice, onConvertProj
   onAccept: (q: Quote) => void;
 }) {
   const [items, setItems] = useState<QuoteItem[]>([]);
-  const { add } = useToast();
+  const { hasPermission, hasAllPermissions } = useOrganization();
 
   useEffect(() => {
     async function loadItems() {
@@ -351,11 +359,11 @@ function QuoteDetail({ quote, onBack, onUpdated, onConvertInvoice, onConvertProj
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {quote.status === 'draft' && <Button onClick={() => onSend(quote)}><Send size={14} /> Send Quote</Button>}
-        {quote.status === 'sent' && <Button onClick={() => onAccept(quote)} variant="subtle"><Check size={14} /> Mark Accepted</Button>}
-        <Button variant="outline" onClick={() => onConvertInvoice(quote)}><Receipt size={14} /> Convert to Invoice</Button>
-        <Button variant="outline" onClick={() => onConvertProject(quote)}><Briefcase size={14} /> Convert to Project</Button>
-        <Button variant="ghost" onClick={() => onDuplicate(quote)}><Copy size={14} /> Duplicate</Button>
+        {quote.status === 'draft' && hasPermission(ACTION_PERMISSIONS.quotesWrite) && <Button onClick={() => onSend(quote)}><Send size={14} /> Send Quote</Button>}
+        {quote.status === 'sent' && hasPermission(ACTION_PERMISSIONS.quotesApprove) && <Button onClick={() => onAccept(quote)} variant="subtle"><Check size={14} /> Mark Accepted</Button>}
+        {hasPermission(ACTION_PERMISSIONS.invoicesWrite) && <Button variant="outline" onClick={() => onConvertInvoice(quote)}><Receipt size={14} /> Convert to Invoice</Button>}
+        {hasAllPermissions([ACTION_PERMISSIONS.projectsWrite, ACTION_PERMISSIONS.quotesApprove]) && <Button variant="outline" onClick={() => onConvertProject(quote)}><Briefcase size={14} /> Convert to Project</Button>}
+        {hasPermission(ACTION_PERMISSIONS.quotesWrite) && <Button variant="ghost" onClick={() => onDuplicate(quote)}><Copy size={14} /> Duplicate</Button>}
       </div>
 
       <Card className="p-6">

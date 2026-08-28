@@ -11,6 +11,9 @@ import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { formatCurrency, formatDate, cn } from '@/lib/utils';
 import { Plus, Target, GripVertical, Mail, Phone, Calendar, TrendingUp } from 'lucide-react';
+import { PermissionGate } from '@/components/auth/PermissionGate';
+import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { useOrganization } from '@/context/OrganizationContext';
 
 const STAGES: { id: LeadStage; label: string; color: string; accent: string }[] = [
   { id: 'new_lead', label: 'New Lead', color: 'border-l-blue-500', accent: 'text-blue-600' },
@@ -23,6 +26,7 @@ const STAGES: { id: LeadStage; label: string; color: string; accent: string }[] 
 
 export function LeadsPage() {
   const { profile } = useAuth();
+  const { hasPermission } = useOrganization();
   const { add } = useToast();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,6 +56,7 @@ export function LeadsPage() {
   const wonValue = leads.filter((l) => l.stage === 'won').reduce((sum, l) => sum + l.estimated_value, 0);
 
   async function handleDrop(stage: LeadStage) {
+    if (!hasPermission(ACTION_PERMISSIONS.leadsWrite)) return;
     if (!draggedId) return;
     const lead = leads.find((l) => l.id === draggedId);
     if (!lead || lead.stage === stage) { setDraggedId(null); setDragOverStage(null); return; }
@@ -80,7 +85,9 @@ export function LeadsPage() {
             {' · '}Won: <span className="text-green-600 font-medium">{formatCurrency(wonValue)}</span>
           </p>
         </div>
-        <Button onClick={() => setShowModal(true)}><Plus size={16} /> Add Lead</Button>
+        <PermissionGate permission={ACTION_PERMISSIONS.leadsWrite}>
+          <Button onClick={() => setShowModal(true)}><Plus size={16} /> Add Lead</Button>
+        </PermissionGate>
       </div>
 
       {loading ? (
@@ -116,7 +123,7 @@ export function LeadsPage() {
                   leadsByStage[stage.id].map((lead) => (
                     <div
                       key={lead.id}
-                      draggable
+                      draggable={hasPermission(ACTION_PERMISSIONS.leadsWrite)}
                       onDragStart={() => setDraggedId(lead.id)}
                       onDragEnd={() => { setDraggedId(null); setDragOverStage(null); }}
                       className={cn(
@@ -152,7 +159,7 @@ export function LeadsPage() {
         </div>
       )}
 
-      <LeadModal open={showModal} onClose={() => setShowModal(false)} onSaved={() => { setShowModal(false); loadLeads(); }} />
+      <LeadModal open={showModal && hasPermission(ACTION_PERMISSIONS.leadsWrite)} onClose={() => setShowModal(false)} onSaved={() => { setShowModal(false); loadLeads(); }} />
     </div>
   );
 }

@@ -5,10 +5,12 @@ import {
   MessageSquare, BarChart3, Lock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { canAccessPage, type AppPage } from '@/lib/authorization';
+import { useOrganization } from '@/context/OrganizationContext';
 
-export interface NavItem { id: string; label: string; icon: ReactNode; group: string; }
+export interface NavItem { id: AppPage; label: string; icon: ReactNode; group: string; }
 
-export const NAV_ITEMS: NavItem[] = [
+const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={17} />, group: 'Overview' },
   { id: 'clients', label: 'Clients', icon: <Users size={17} />, group: 'CRM' },
   { id: 'leads', label: 'Leads Pipeline', icon: <Target size={17} />, group: 'CRM' },
@@ -25,10 +27,12 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'settings', label: 'Settings', icon: <Settings size={17} />, group: 'System' },
 ];
 
-interface SidebarProps { current: string; onNavigate: (id: string) => void; collapsed: boolean; }
+interface SidebarProps { current: AppPage; onNavigate: (id: AppPage) => void; collapsed: boolean; }
 
 export function Sidebar({ current, onNavigate, collapsed }: SidebarProps) {
+  const { permissions } = useOrganization();
   const groups = [...new Set(NAV_ITEMS.map((n) => n.group))];
+  const authorizedItems = NAV_ITEMS.filter((item) => canAccessPage(item.id, permissions));
 
   return (
     <aside className={cn('h-screen sticky top-0 flex flex-col border-r border-line bg-surface transition-all duration-200 z-30 shrink-0', collapsed ? 'w-16' : 'w-56')}>
@@ -51,7 +55,7 @@ export function Sidebar({ current, onNavigate, collapsed }: SidebarProps) {
           <div key={group}>
             {!collapsed && <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-wider text-tertiary">{group}</p>}
             <div className="space-y-0.5">
-              {NAV_ITEMS.filter((n) => n.group === group).map((item) => {
+              {authorizedItems.filter((n) => n.group === group).map((item) => {
                 const active = current === item.id;
                 return (
                   <button key={item.id} onClick={() => onNavigate(item.id)}

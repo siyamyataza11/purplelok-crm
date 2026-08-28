@@ -3,14 +3,17 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/components/ui/Toast';
 import type { Project, Client, Profile, ProjectMilestone, ProjectStatus, ProjectType, ProjectHealth } from '@/types';
-import { Card, CardBody } from '@/components/ui/Card';
+import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input, Textarea, Select } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { formatCurrency, formatDate, cn, isOverdue, daysUntil } from '@/lib/utils';
-import { Plus, Briefcase, ArrowLeft, GripVertical, Calendar, DollarSign, AlertTriangle, CheckCircle2, Clock, Activity, Users, Target } from 'lucide-react';
+import { formatCurrency, formatDate, cn, isOverdue } from '@/lib/utils';
+import { Plus, ArrowLeft, GripVertical, Calendar, DollarSign, CheckCircle2, Activity, Target } from 'lucide-react';
+import { PermissionGate } from '@/components/auth/PermissionGate';
+import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { useOrganization } from '@/context/OrganizationContext';
 
 type View = 'board' | 'detail';
 
@@ -39,8 +42,8 @@ const HEALTH_CONFIG: Record<ProjectHealth, { label: string; variant: 'success' |
 };
 
 export function ProjectsPage() {
-  const { profile } = useAuth();
   const { add } = useToast();
+  const { hasPermission } = useOrganization();
   const [projects, setProjects] = useState<Project[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -76,6 +79,7 @@ export function ProjectsPage() {
   }, [filtered]);
 
   async function handleDrop(status: ProjectStatus) {
+    if (!hasPermission(ACTION_PERMISSIONS.projectsManage)) return;
     if (!draggedId) return;
     const proj = projects.find((p) => p.id === draggedId);
     if (!proj || proj.status === status) { setDraggedId(null); setDragOverStatus(null); return; }
@@ -99,7 +103,9 @@ export function ProjectsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Projects</h1>
           <p className="text-sm text-tertiary mt-0.5">{projects.length} total projects</p>
         </div>
-        <Button onClick={() => setShowModal(true)}><Plus size={16} /> New Project</Button>
+        <PermissionGate permission={ACTION_PERMISSIONS.projectsWrite}>
+          <Button onClick={() => setShowModal(true)}><Plus size={16} /> New Project</Button>
+        </PermissionGate>
       </div>
 
       <div className="flex gap-3">
@@ -139,7 +145,7 @@ export function ProjectsPage() {
                   byStatus[col.id].map((p) => (
                     <div
                       key={p.id}
-                      draggable
+                      draggable={hasPermission(ACTION_PERMISSIONS.projectsManage)}
                       onDragStart={() => setDraggedId(p.id)}
                       onDragEnd={() => { setDraggedId(null); setDragOverStatus(null); }}
                       onClick={() => { setSelected(p); setView('detail'); }}
@@ -174,7 +180,7 @@ export function ProjectsPage() {
         </div>
       )}
 
-      <ProjectModal open={showModal} onClose={() => setShowModal(false)} clients={clients} profiles={profiles} onSaved={() => { setShowModal(false); load(); }} />
+      <ProjectModal open={showModal && hasPermission(ACTION_PERMISSIONS.projectsWrite)} onClose={() => setShowModal(false)} clients={clients} profiles={profiles} onSaved={() => { setShowModal(false); load(); }} />
     </div>
   );
 }
@@ -182,26 +188,28 @@ export function ProjectsPage() {
 function ProjectModal({ open, onClose, clients, profiles, onSaved }: { open: boolean; onClose: () => void; clients: Client[]; profiles: Profile[]; onSaved: () => void }) {
   const { profile } = useAuth();
   const { add } = useToast();
+  const { hasPermission } = useOrganization();
   const [form, setForm] = useState<Partial<Project>>({ type: 'website', status: 'planning', progress: 0, health: 'on_track' });
   const [assignedTo, setAssignedTo] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
   async function handleSave() {
+    if (!hasPermission(ACTION_PERMISSIONS.projectsWrite)) return;
+
+    const canManageProjects = hasPermission(ACTION_PERMISSIONS.projectsManage);
     setSaving(true);
     try {
       const { error } = await supabase.from('projects').insert({
         name: form.name,
         client_id: form.client_id,
         type: form.type || 'other',
-        status: 'planning',
         description: form.description,
         start_date: form.start_date,
         due_date: form.due_date,
         budget: form.budget || 0,
         progress: 0,
-        health: 'on_track',
-        assigned_to: assignedTo,
         created_by: profile?.id,
+        ...(canManageProjects ? { assigned_to: assignedTo } : {}),
       });
       if (error) throw error;
       add('success', 'Project created');
@@ -232,25 +240,27 @@ function ProjectModal({ open, onClose, clients, profiles, onSaved }: { open: boo
           <Input label="Budget" type="number" value={form.budget || 0} onChange={(e) => setForm({ ...form, budget: Number(e.target.value) })} />
         </div>
         <Textarea label="Description" rows={3} value={form.description || ''} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-        <div>
-          <label className="label-text block mb-2">Assign Team Members</label>
-          <div className="grid grid-cols-2 gap-2">
-            {profiles.map((p) => (
-              <label key={p.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted cursor-pointer">
-                <input type="checkbox" checked={assignedTo.includes(p.id)} onChange={(e) => setAssignedTo(e.target.checked ? [...assignedTo, p.id] : assignedTo.filter((id) => id !== p.id))} className="w-4 h-4 accent-purple" />
-                <span className="text-sm text-secondary">{p.full_name}</span>
-              </label>
-            ))}
+        {hasPermission(ACTION_PERMISSIONS.projectsManage) && (
+          <div>
+            <label className="label-text block mb-2">Assign Team Members</label>
+            <div className="grid grid-cols-2 gap-2">
+              {profiles.map((p) => (
+                <label key={p.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted cursor-pointer">
+                  <input type="checkbox" checked={assignedTo.includes(p.id)} onChange={(e) => setAssignedTo(e.target.checked ? [...assignedTo, p.id] : assignedTo.filter((id) => id !== p.id))} className="w-4 h-4 accent-purple" />
+                  <span className="text-sm text-secondary">{p.full_name}</span>
+                </label>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </Modal>
   );
 }
 
 function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Project; profiles: Profile[]; onBack: () => void; onUpdated: () => void }) {
-  const { profile } = useAuth();
   const { add } = useToast();
+  const { hasPermission } = useOrganization();
   const [milestones, setMilestones] = useState<ProjectMilestone[]>([]);
   const [newMilestone, setNewMilestone] = useState('');
   const [progress, setProgress] = useState(project.progress);
@@ -265,6 +275,7 @@ function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Proj
   }, [project.id]);
 
   async function addMilestone() {
+    if (!hasPermission(ACTION_PERMISSIONS.projectsWrite)) return;
     if (!newMilestone.trim()) return;
     const { data, error } = await supabase.from('project_milestones').insert({ project_id: project.id, title: newMilestone }).select('*').single();
     if (error) { add('error', error.message); return; }
@@ -274,12 +285,21 @@ function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Proj
   }
 
   async function toggleMilestone(m: ProjectMilestone) {
+    if (!hasPermission(ACTION_PERMISSIONS.projectsWrite)) return;
     await supabase.from('project_milestones').update({ completed: !m.completed, completed_at: !m.completed ? new Date().toISOString() : null }).eq('id', m.id);
     setMilestones((prev) => prev.map((x) => (x.id === m.id ? { ...x, completed: !x.completed } : x)));
   }
 
   async function updateProgress() {
-    await supabase.from('projects').update({ progress, health }).eq('id', project.id);
+    if (!hasPermission(ACTION_PERMISSIONS.projectsWrite)) return;
+    const canManageProjects = hasPermission(ACTION_PERMISSIONS.projectsManage);
+    await supabase
+      .from('projects')
+      .update({
+        progress,
+        ...(canManageProjects ? { health } : {}),
+      })
+      .eq('id', project.id);
     add('success', 'Project updated');
     onUpdated();
   }
@@ -307,21 +327,21 @@ function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Proj
             <div className="space-y-4">
               <div>
                 <div className="flex justify-between text-sm mb-2"><span className="text-tertiary">Progress</span><span className="font-medium">{progress}%</span></div>
-                <input type="range" min={0} max={100} value={progress} onChange={(e) => setProgress(Number(e.target.value))} className="w-full accent-purple" />
+                <input type="range" min={0} max={100} value={progress} onChange={(e) => setProgress(Number(e.target.value))} disabled={!hasPermission(ACTION_PERMISSIONS.projectsWrite)} className="w-full accent-purple" />
                 <div className="h-2 bg-muted rounded-full overflow-hidden mt-2">
                   <div className="h-full bg-purple-600 rounded-full transition-all" style={{ width: `${progress}%` }} />
                 </div>
               </div>
               <div>
                 <label className="label-text block mb-2">Health Status</label>
-                <select value={health} onChange={(e) => setHealth(e.target.value as ProjectHealth)} className="input-field">
+                <select value={health} onChange={(e) => setHealth(e.target.value as ProjectHealth)} disabled={!hasPermission(ACTION_PERMISSIONS.projectsManage)} className="input-field">
                   <option value="on_track">On Track</option>
                   <option value="at_risk">At Risk</option>
                   <option value="delayed">Delayed</option>
                   <option value="completed">Completed</option>
                 </select>
               </div>
-              <Button onClick={updateProgress} variant="subtle" size="sm">Save Changes</Button>
+              <PermissionGate permission={ACTION_PERMISSIONS.projectsWrite}><Button onClick={updateProgress} variant="subtle" size="sm">Save Changes</Button></PermissionGate>
             </div>
           </Card>
 
@@ -330,17 +350,17 @@ function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Proj
               <h3 className="text-sm font-semibold">Milestones</h3>
               <Badge variant="neutral">{completedMilestones}/{milestones.length}</Badge>
             </div>
-            <div className="flex gap-2 mb-4">
+            {hasPermission(ACTION_PERMISSIONS.projectsWrite) && <div className="flex gap-2 mb-4">
               <input value={newMilestone} onChange={(e) => setNewMilestone(e.target.value)} placeholder="Add a milestone..." className="input-field" onKeyDown={(e) => e.key === 'Enter' && addMilestone()} />
               <Button onClick={addMilestone}><Plus size={16} /></Button>
-            </div>
+            </div>}
             {milestones.length === 0 ? (
               <EmptyState icon={<Target size={24} />} title="No milestones yet" />
             ) : (
               <div className="space-y-2">
                 {milestones.map((m) => (
                   <div key={m.id} className="flex items-center gap-3 p-3 rounded-lg bg-muted group">
-                    <button onClick={() => toggleMilestone(m)} className={cn('w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors', m.completed ? 'bg-green-500 border-green-500' : 'border-line')}>
+                    <button disabled={!hasPermission(ACTION_PERMISSIONS.projectsWrite)} onClick={() => toggleMilestone(m)} className={cn('w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors', m.completed ? 'bg-green-500 border-green-500' : 'border-line')}>
                       {m.completed && <CheckCircle2 size={12} className="text-white" />}
                     </button>
                     <span className={cn('text-sm flex-1', m.completed ? 'text-tertiary line-through' : 'text-primary')}>{m.title}</span>

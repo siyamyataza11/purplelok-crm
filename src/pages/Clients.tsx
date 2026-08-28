@@ -32,12 +32,16 @@ import {
   StickyNote,
   ExternalLink,
 } from 'lucide-react';
+import { PermissionGate } from '@/components/auth/PermissionGate';
+import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { useOrganization } from '@/context/OrganizationContext';
 
 type View = 'list' | 'detail';
 
 export function ClientsPage({ initialQuery = '' }: { initialQuery?: string }) {
   const { profile } = useAuth();
   const { add } = useToast();
+  const { hasPermission } = useOrganization();
   const [view, setView] = useState<View>('list');
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,6 +75,7 @@ export function ClientsPage({ initialQuery = '' }: { initialQuery?: string }) {
   }, [clients, search, statusFilter]);
 
   async function toggleFavorite(c: Client) {
+    if (!hasPermission(ACTION_PERMISSIONS.clientsWrite)) return;
     await supabase.from('clients').update({ favorite: !c.favorite }).eq('id', c.id);
     setClients((prev) => prev.map((x) => (x.id === c.id ? { ...x, favorite: !x.favorite } : x)));
   }
@@ -95,9 +100,11 @@ export function ClientsPage({ initialQuery = '' }: { initialQuery?: string }) {
           <h1 className="text-2xl font-bold tracking-tight">Clients</h1>
           <p className="text-sm text-tertiary mt-0.5">{clients.length} total clients</p>
         </div>
-        <Button onClick={() => { setEditing(null); setShowModal(true); }}>
-          <Plus size={16} /> Add Client
-        </Button>
+        <PermissionGate permission={ACTION_PERMISSIONS.clientsWrite}>
+          <Button onClick={() => { setEditing(null); setShowModal(true); }}>
+            <Plus size={16} /> Add Client
+          </Button>
+        </PermissionGate>
       </div>
 
       {/* Filters */}
@@ -136,7 +143,7 @@ export function ClientsPage({ initialQuery = '' }: { initialQuery?: string }) {
           icon={<Users size={28} />}
           title="No clients found"
           description="Add your first client to get started"
-          action={<Button onClick={() => { setEditing(null); setShowModal(true); }}><Plus size={16} /> Add Client</Button>}
+          action={hasPermission(ACTION_PERMISSIONS.clientsWrite) ? <Button onClick={() => { setEditing(null); setShowModal(true); }}><Plus size={16} /> Add Client</Button> : undefined}
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -150,12 +157,12 @@ export function ClientsPage({ initialQuery = '' }: { initialQuery?: string }) {
                     <p className="text-xs text-tertiary">{c.industry || '—'}</p>
                   </div>
                 </div>
-                <button
+                {hasPermission(ACTION_PERMISSIONS.clientsWrite) && <button
                   onClick={(e) => { e.stopPropagation(); toggleFavorite(c); }}
                   className="text-tertiary hover:text-amber-500 transition-colors"
                 >
                   <Star size={16} fill={c.favorite ? 'currentColor' : 'none'} className={c.favorite ? 'text-amber-500' : ''} />
-                </button>
+                </button>}
               </div>
               <div className="space-y-1.5 text-sm">
                 {c.contact_person && (
@@ -192,7 +199,7 @@ export function ClientsPage({ initialQuery = '' }: { initialQuery?: string }) {
       )}
 
       <ClientModal
-        open={showModal}
+        open={showModal && hasPermission(ACTION_PERMISSIONS.clientsWrite)}
         onClose={() => setShowModal(false)}
         client={editing}
         onSaved={() => {
@@ -337,6 +344,7 @@ function ClientModal({
 function ClientDetail({ client, onBack, onUpdated }: { client: Client; onBack: () => void; onUpdated: () => void }) {
   const { profile } = useAuth();
   const { add } = useToast();
+  const { hasPermission } = useOrganization();
   const [tab, setTab] = useState<'overview' | 'notes' | 'invoices' | 'quotes' | 'projects' | 'tasks'>('overview');
   const [notes, setNotes] = useState<ClientNote[]>([]);
   const [newNote, setNewNote] = useState('');
@@ -364,6 +372,7 @@ function ClientDetail({ client, onBack, onUpdated }: { client: Client; onBack: (
   }, [client.id]);
 
   async function addNote() {
+    if (!hasPermission(ACTION_PERMISSIONS.clientsWrite)) return;
     if (!newNote.trim()) return;
     const { data, error } = await supabase.from('client_notes').insert({
       client_id: client.id,
@@ -377,6 +386,7 @@ function ClientDetail({ client, onBack, onUpdated }: { client: Client; onBack: (
   }
 
   async function deleteNote(id: string) {
+    if (!hasPermission(ACTION_PERMISSIONS.clientsWrite)) return;
     await supabase.from('client_notes').delete().eq('id', id);
     setNotes((prev) => prev.filter((n) => n.id !== id));
   }
@@ -452,7 +462,7 @@ function ClientDetail({ client, onBack, onUpdated }: { client: Client; onBack: (
 
       {tab === 'notes' && (
         <Card className="p-5">
-          <div className="flex gap-3 mb-5">
+          {hasPermission(ACTION_PERMISSIONS.clientsWrite) && <div className="flex gap-3 mb-5">
             <input
               value={newNote}
               onChange={(e) => setNewNote(e.target.value)}
@@ -461,7 +471,7 @@ function ClientDetail({ client, onBack, onUpdated }: { client: Client; onBack: (
               onKeyDown={(e) => e.key === 'Enter' && addNote()}
             />
             <Button onClick={addNote}><Plus size={16} /> Add</Button>
-          </div>
+          </div>}
           {notes.length === 0 ? (
             <EmptyState icon={<StickyNote size={24} />} title="No notes yet" />
           ) : (
@@ -473,9 +483,9 @@ function ClientDetail({ client, onBack, onUpdated }: { client: Client; onBack: (
                     <p className="text-sm text-primary">{n.body}</p>
                     <p className="text-xs text-tertiary mt-1">{n.author?.full_name} · {timeAgo(n.created_at)}</p>
                   </div>
-                  <button onClick={() => deleteNote(n.id)} className="text-tertiary hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {hasPermission(ACTION_PERMISSIONS.clientsWrite) && <button onClick={() => deleteNote(n.id)} className="text-tertiary hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Trash2 size={14} />
-                  </button>
+                  </button>}
                 </div>
               ))}
             </div>
