@@ -1,0 +1,226 @@
+/*
+ * CI-only prerequisite fixture.
+ *
+ * Batch 2 and Batch 3A provisioned these tenants operationally in production,
+ * so that state is deliberately absent from migration history. This fixture
+ * recreates the approved state only in the disposable CI database after Batch
+ * 1 and before Batch 3B. It is never loaded by Supabase migration or seed paths.
+ */
+
+BEGIN;
+
+INSERT INTO public.organizations (id, name, slug, status)
+VALUES
+  ('00000000-0000-0000-0000-00000000a001', 'PURPLELOK', 'purplelok', 'active'),
+  ('00000000-0000-0000-0000-00000000a002', 'PURPLELOK Demo', 'purplelok-demo', 'active');
+
+INSERT INTO public.organization_roles (id, organization_id, name, key, is_system)
+VALUES
+  ('00000000-0000-0000-0000-00000000d001', '00000000-0000-0000-0000-00000000a001', 'Owner', 'owner', true),
+  ('00000000-0000-0000-0000-00000000d002', '00000000-0000-0000-0000-00000000a001', 'Admin', 'admin', true),
+  ('00000000-0000-0000-0000-00000000d003', '00000000-0000-0000-0000-00000000a001', 'Finance', 'finance', true),
+  ('00000000-0000-0000-0000-00000000d004', '00000000-0000-0000-0000-00000000a001', 'Project Manager', 'project_manager', true),
+  ('00000000-0000-0000-0000-00000000d005', '00000000-0000-0000-0000-00000000a001', 'Staff', 'staff', true),
+  ('00000000-0000-0000-0000-00000000d006', '00000000-0000-0000-0000-00000000a001', 'Client', 'client', true),
+  ('00000000-0000-0000-0000-00000000e001', '00000000-0000-0000-0000-00000000a002', 'Owner', 'owner', true),
+  ('00000000-0000-0000-0000-00000000e002', '00000000-0000-0000-0000-00000000a002', 'Admin', 'admin', true),
+  ('00000000-0000-0000-0000-00000000e003', '00000000-0000-0000-0000-00000000a002', 'Finance', 'finance', true),
+  ('00000000-0000-0000-0000-00000000e004', '00000000-0000-0000-0000-00000000a002', 'Project Manager', 'project_manager', true),
+  ('00000000-0000-0000-0000-00000000e005', '00000000-0000-0000-0000-00000000a002', 'Staff', 'staff', true),
+  ('00000000-0000-0000-0000-00000000e006', '00000000-0000-0000-0000-00000000a002', 'Client', 'client', true);
+
+-- Owner and Admin receive the complete immutable permission catalogue.
+INSERT INTO public.organization_role_permissions (
+  organization_id,
+  organization_role_id,
+  permission_key
+)
+SELECT role.organization_id, role.id, permission.key
+  FROM public.organization_roles AS role
+ CROSS JOIN public.permissions AS permission
+ WHERE role.key IN ('owner', 'admin')
+   AND role.organization_id IN (
+     '00000000-0000-0000-0000-00000000a001',
+     '00000000-0000-0000-0000-00000000a002'
+   );
+
+-- Remaining role mappings reproduce the approved operational matrix.
+WITH permission_matrix(role_key, permission_keys) AS (
+  VALUES
+    ('finance', ARRAY[
+      'clients.read', 'projects.read', 'quotes.read', 'quotes.write',
+      'quotes.approve', 'invoices.read', 'invoices.write',
+      'invoices.approve', 'payments.read', 'payments.record',
+      'documents.read', 'reports.read', 'settings.read'
+    ]::text[]),
+    ('project_manager', ARRAY[
+      'clients.read', 'projects.read', 'projects.write', 'projects.manage',
+      'tasks.read', 'tasks.write', 'documents.read', 'documents.write',
+      'tickets.read', 'tickets.write', 'reports.read', 'settings.read'
+    ]::text[]),
+    ('staff', ARRAY[
+      'clients.read', 'projects.read', 'tasks.read', 'tasks.write',
+      'documents.read', 'documents.write', 'tickets.read', 'tickets.write',
+      'settings.read'
+    ]::text[]),
+    ('client', ARRAY[
+      'projects.read', 'documents.read', 'quotes.read', 'invoices.read',
+      'tickets.read', 'tickets.write'
+    ]::text[])
+)
+INSERT INTO public.organization_role_permissions (
+  organization_id,
+  organization_role_id,
+  permission_key
+)
+SELECT role.organization_id, role.id, expanded.permission_key
+  FROM public.organization_roles AS role
+  JOIN permission_matrix AS matrix ON matrix.role_key = role.key
+ CROSS JOIN LATERAL unnest(matrix.permission_keys) AS expanded(permission_key)
+ WHERE role.organization_id IN (
+   '00000000-0000-0000-0000-00000000a001',
+   '00000000-0000-0000-0000-00000000a002'
+ );
+
+INSERT INTO public.organization_members (
+  id,
+  organization_id,
+  user_id,
+  status,
+  job_title
+)
+VALUES
+  (
+    '00000000-0000-0000-0000-00000000c001',
+    '00000000-0000-0000-0000-00000000a001',
+    '00000000-0000-0000-0000-00000000b001',
+    'active',
+    'Co-Founder & CEO'
+  ),
+  (
+    '00000000-0000-0000-0000-00000000c002',
+    '00000000-0000-0000-0000-00000000a002',
+    '148803f0-322b-408e-9ffc-c9ce486172a6',
+    'active',
+    'Demo Administrator'
+  );
+
+INSERT INTO public.organization_member_roles (
+  organization_id,
+  organization_member_id,
+  organization_role_id
+)
+VALUES
+  (
+    '00000000-0000-0000-0000-00000000a001',
+    '00000000-0000-0000-0000-00000000c001',
+    '00000000-0000-0000-0000-00000000d001'
+  ),
+  (
+    '00000000-0000-0000-0000-00000000a002',
+    '00000000-0000-0000-0000-00000000c002',
+    '00000000-0000-0000-0000-00000000e002'
+  );
+
+DO $assertions$
+DECLARE
+  organization record;
+BEGIN
+  IF (SELECT count(*) FROM public.organizations
+       WHERE (name, slug, status) IN (
+         ('PURPLELOK', 'purplelok', 'active'),
+         ('PURPLELOK Demo', 'purplelok-demo', 'active')
+       )) <> 2 THEN
+    RAISE EXCEPTION 'CI tenant bootstrap: expected the two active protected organizations';
+  END IF;
+
+  FOR organization IN
+    SELECT id, slug
+      FROM public.organizations
+     WHERE slug IN ('purplelok', 'purplelok-demo')
+  LOOP
+    IF (SELECT count(*) FROM public.organization_roles
+         WHERE organization_id = organization.id) <> 6 THEN
+      RAISE EXCEPTION 'CI tenant bootstrap: % must have six roles', organization.slug;
+    END IF;
+
+    IF (SELECT count(*) FROM public.organization_role_permissions
+         WHERE organization_id = organization.id) <> 96 THEN
+      RAISE EXCEPTION 'CI tenant bootstrap: % must have 96 role-permission mappings', organization.slug;
+    END IF;
+
+    IF EXISTS (
+      WITH expected(role_key, permission_count) AS (VALUES
+        ('owner', 28),
+        ('admin', 28),
+        ('finance', 13),
+        ('project_manager', 12),
+        ('staff', 9),
+        ('client', 6)
+      )
+      SELECT 1
+        FROM expected
+        JOIN public.organization_roles AS role
+          ON role.organization_id = organization.id
+         AND role.key = expected.role_key
+        LEFT JOIN public.organization_role_permissions AS mapping
+          ON mapping.organization_id = role.organization_id
+         AND mapping.organization_role_id = role.id
+       GROUP BY expected.role_key, expected.permission_count
+      HAVING count(mapping.permission_key) <> expected.permission_count
+    ) THEN
+      RAISE EXCEPTION 'CI tenant bootstrap: % role permission counts are invalid', organization.slug;
+    END IF;
+  END LOOP;
+
+  IF (SELECT count(*) FROM public.permissions) <> 28 THEN
+    RAISE EXCEPTION 'CI tenant bootstrap: permission catalogue must contain 28 keys';
+  END IF;
+
+  IF (SELECT count(*)
+        FROM public.organization_members AS membership
+        JOIN public.profiles AS profile ON profile.id = membership.user_id
+        JOIN public.organizations AS tenant ON tenant.id = membership.organization_id
+       WHERE profile.email = 'siyamyataza11@gmail.com'
+         AND profile.role = 'staff'
+         AND membership.status = 'active'
+         AND membership.job_title = 'Co-Founder & CEO'
+         AND tenant.slug = 'purplelok') <> 1 THEN
+    RAISE EXCEPTION 'CI tenant bootstrap: real owner membership is invalid';
+  END IF;
+
+  IF (SELECT count(*)
+        FROM public.organization_members AS membership
+        JOIN public.profiles AS profile ON profile.id = membership.user_id
+        JOIN public.organizations AS tenant ON tenant.id = membership.organization_id
+       WHERE profile.email = 'admin@purplelok.com'
+         AND profile.role = 'super_admin'
+         AND membership.status = 'active'
+         AND membership.job_title = 'Demo Administrator'
+         AND tenant.slug = 'purplelok-demo') <> 1 THEN
+    RAISE EXCEPTION 'CI tenant bootstrap: Demo administrator membership is invalid';
+  END IF;
+
+  IF (SELECT count(*) FROM public.organization_member_roles) <> 2
+     OR (SELECT count(*)
+           FROM public.organization_member_roles AS assignment
+           JOIN public.organization_roles AS role
+             ON role.id = assignment.organization_role_id
+            AND role.organization_id = assignment.organization_id
+          WHERE role.key = 'owner') <> 1
+     OR (SELECT count(*)
+           FROM public.organization_member_roles AS assignment
+           JOIN public.organization_roles AS role
+             ON role.id = assignment.organization_role_id
+            AND role.organization_id = assignment.organization_id
+          WHERE role.key = 'admin') <> 1 THEN
+    RAISE EXCEPTION 'CI tenant bootstrap: protected role assignments are invalid';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM public.platform_admins) THEN
+    RAISE EXCEPTION 'CI tenant bootstrap: platform_admins must remain empty';
+  END IF;
+END
+$assertions$;
+
+COMMIT;

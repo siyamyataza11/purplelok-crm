@@ -62,3 +62,47 @@ PURPLELOK Demo. Both also require `platform_admins` to remain empty.
 
 The Client role is created but deliberately left unassigned. Its permissions
 are not production-safe until client-specific row-level scope is implemented.
+
+## Existing-user member provisioning
+
+`provision:member` is the narrow Batch 4D command for explicitly adding an
+existing, active Auth/profile identity to an existing organization. It resolves
+the organization by slug and resolves the requested role from that
+organization's database roles. It never creates Auth users, organizations,
+roles, permissions, platform administrators, or browser mutation grants.
+
+Dry run is the default:
+
+```sh
+npm run provision:member -- \
+  --email employee@example.com \
+  --organization purplelok \
+  --role Staff \
+  --job-title "Web Developer"
+```
+
+Apply requires the explicit flag:
+
+```sh
+npm run provision:member -- \
+  --email employee@example.com \
+  --organization purplelok \
+  --role Staff \
+  --job-title "Web Developer" \
+  --apply
+```
+
+The entry point reads `SUPABASE_DB_URL` from the process environment. For local
+operator use only, it also loads the ignored `.env.provisioning.local` when the
+variable is not already set.
+
+Dry runs use `REPEATABLE READ READ ONLY` and cannot write. Apply uses a
+`SERIALIZABLE` transaction, an organization/user advisory lock, and plain
+inserts for compatible missing records only. It re-plans after the inserts and
+commits only when zero changes remain and `platform_admins` plus `profiles.role`
+are unchanged. Existing incompatible membership or authority is never repaired
+silently.
+
+The Client role is rejected entirely in Batch 4D. The real owner and bootstrap
+admin are protected from cross-tenant membership and cannot be changed by this
+command; their approved existing mappings can only produce a verified no-op.

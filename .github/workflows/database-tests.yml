@@ -1,0 +1,198 @@
+name: Isolated database validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: batch-5a-database-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  database-tests:
+    name: Batch 5A isolated validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install application dependencies
+        run: npm ci
+
+      - name: Set up Supabase CLI 2.116.0
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.116.0
+
+      - name: Verify isolated runner prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          supabase --version
+          docker --version
+          if [[ -f supabase/.temp/project-ref ]]; then
+            echo "Refusing to run with a linked Supabase project."
+            exit 1
+          fi
+          for variable in \
+            SUPABASE_ACCESS_TOKEN \
+            SUPABASE_DB_URL \
+            SUPABASE_DB_PASSWORD \
+            SUPABASE_PROJECT_REF \
+            SUPABASE_SERVICE_ROLE_KEY \
+            SUPABASE_URL; do
+            if [[ -n "${!variable:-}" ]]; then
+              echo "Refusing to run while ${variable} is configured."
+              exit 1
+            fi
+          done
+
+      - name: Stage repository migrations for ordered bootstrap
+        id: migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          migration_store="${RUNNER_TEMP}/purplelok-migrations"
+          mkdir -p "${migration_store}"
+          expected=(
+            20260728110005_create_crm_schema.sql
+            20260728111045_seed_demo_data.sql
+            20260828120000_batch_1_identity_rbac_foundation.sql
+            20260828150000_batch_3b_tenant_ownership_foundation.sql
+            20260828170000_batch_4_active_organization_context.sql
+            20260829100000_batch_5a_tenant_data_foundation.sql
+          )
+
+          mapfile -t actual < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort)
+          if [[ "${actual[*]}" != "${expected[*]}" ]]; then
+            echo "Migration inventory differs from the approved six-file Batch 5A sequence."
+            printf 'Expected: %s\n' "${expected[@]}"
+            printf 'Actual: %s\n' "${actual[@]}"
+            exit 1
+          fi
+
+          for migration in "${expected[@]}"; do
+            mv "supabase/migrations/${migration}" "${migration_store}/${migration}"
+          done
+          echo "store=${migration_store}" >> "${GITHUB_OUTPUT}"
+
+      - name: Start disposable local Supabase database
+        run: supabase db start
+
+      - name: Resolve local database container
+        id: database
+        shell: bash
+        run: |
+          set -euo pipefail
+          database_container="$(docker ps --format '{{.Names}}' | grep '^supabase_db_purplelok-crm$')"
+          if [[ -z "${database_container}" ]]; then
+            echo "The expected disposable Supabase database container is not running."
+            exit 1
+          fi
+          echo "container=${database_container}" >> "${GITHUB_OUTPUT}"
+
+      - name: Apply core CRM schema migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ steps.migrations.outputs.store }}/20260728110005_create_crm_schema.sql" supabase/migrations/
+          supabase migration up --local
+
+      - name: Bootstrap test-only Auth identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i "${{ steps.database.outputs.container }}" \
+            psql -X --set ON_ERROR_STOP=1 --username postgres --dbname postgres \
+            < supabase/tests/setup/batch_5a_ci_auth_bootstrap.psql
+
+      - name: Apply demo seed and Batch 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ steps.migrations.outputs.store }}/20260728111045_seed_demo_data.sql" supabase/migrations/
+          cp "${{ steps.migrations.outputs.store }}/20260828120000_batch_1_identity_rbac_foundation.sql" supabase/migrations/
+          supabase migration up --local
+
+      - name: Test Batch 1 at its deployment stage
+        run: supabase test db --local supabase/tests/database/batch_1_identity_rbac_foundation.test.sql
+
+      - name: Bootstrap test-only organization state
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i "${{ steps.database.outputs.container }}" \
+            psql -X --set ON_ERROR_STOP=1 --username postgres --dbname postgres \
+            < supabase/tests/setup/batch_5a_ci_tenant_bootstrap.psql
+
+      - name: Apply and test Batch 3B
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ steps.migrations.outputs.store }}/20260828150000_batch_3b_tenant_ownership_foundation.sql" supabase/migrations/
+          supabase migration up --local
+          supabase test db --local supabase/tests/database/batch_3b_tenant_ownership_foundation.test.sql
+
+      - name: Apply and test Batch 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ steps.migrations.outputs.store }}/20260828170000_batch_4_active_organization_context.sql" supabase/migrations/
+          supabase migration up --local
+          supabase test db --local supabase/tests/database/batch_4_active_organization_context.test.sql
+
+      - name: Apply Batch 5A
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ steps.migrations.outputs.store }}/20260829100000_batch_5a_tenant_data_foundation.sql" supabase/migrations/
+          supabase migration up --local
+
+      - name: Verify pgTAP is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          available="$(docker exec "${{ steps.database.outputs.container }}" \
+            psql -X --tuples-only --no-align --username postgres --dbname postgres \
+            --command "SELECT count(*) FROM pg_available_extensions WHERE name = 'pgtap';")"
+          if [[ "${available}" != "1" ]]; then
+            echo "pgTAP is not available in the disposable database."
+            exit 1
+          fi
+
+      - name: Test Batch 5A
+        run: supabase test db --local supabase/tests/database/batch_5a_tenant_data_foundation.test.sql
+
+      - name: Validate frontend and scripts under Node 22
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run test:frontend
+          npm run typecheck
+          node node_modules/eslint/bin/eslint.js \
+            src/lib/tenant-data.ts \
+            src/lib/tenant-data-internal.ts \
+            src/lib/tenant-data.type-test.ts \
+            src/context/TenantDataContext.tsx \
+            scripts/check-domain-query-baseline.ts \
+            tests/frontend/batch5-tenant-data.test.ts \
+            src/App.tsx \
+            src/types/index.ts \
+            eslint.config.js
+          npm run check:tenant-queries
+          npm run build
+
+      - name: Stop disposable database
+        if: always()
+        run: supabase stop --no-backup

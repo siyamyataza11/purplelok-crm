@@ -1,0 +1,51 @@
+/*
+ * CI-only prerequisite fixture.
+ *
+ * The historical demo-data migration references the fixed bootstrap profile
+ * UUID but intentionally did not create an Auth account. Production already
+ * had that operational identity. A fresh disposable database must establish
+ * both protected identities after the core schema creates the signup trigger
+ * and before the demo-data migration executes.
+ */
+
+BEGIN;
+
+INSERT INTO auth.users (id, email, raw_user_meta_data)
+VALUES
+  (
+    '148803f0-322b-408e-9ffc-c9ce486172a6',
+    'admin@purplelok.com',
+    '{"full_name":"PURPLELOK Demo Administrator"}'::jsonb
+  ),
+  (
+    '00000000-0000-0000-0000-00000000b001',
+    'siyamyataza11@gmail.com',
+    '{"full_name":"Siyamthanda Yataza"}'::jsonb
+  );
+
+DO $assertions$
+BEGIN
+  IF (SELECT count(*) FROM auth.users
+       WHERE id IN (
+         '148803f0-322b-408e-9ffc-c9ce486172a6',
+         '00000000-0000-0000-0000-00000000b001'
+       )
+         AND deleted_at IS NULL) <> 2 THEN
+    RAISE EXCEPTION 'CI Auth bootstrap: expected exactly two live Auth identities';
+  END IF;
+
+  IF (SELECT count(*)
+        FROM public.profiles AS profile
+        JOIN auth.users AS identity ON identity.id = profile.id
+       WHERE identity.id IN (
+         '148803f0-322b-408e-9ffc-c9ce486172a6',
+         '00000000-0000-0000-0000-00000000b001'
+       )
+         AND profile.email = identity.email
+         AND profile.active) <> 2 THEN
+    RAISE EXCEPTION 'CI Auth bootstrap: signup trigger did not create two active matching profiles';
+  END IF;
+END
+$assertions$;
+
+COMMIT;
