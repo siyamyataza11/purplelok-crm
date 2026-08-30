@@ -146,46 +146,36 @@ SELECT throws_ok(
   'roles cannot be assigned across organizations'
 );
 
-SELECT hasnt_table_privilege('anon', 'public.organizations', 'SELECT', 'anon cannot read organizations');
-SELECT hasnt_table_privilege('anon', 'public.organization_members', 'SELECT', 'anon cannot read organization members');
-SELECT hasnt_table_privilege('anon', 'public.permissions', 'SELECT', 'anon cannot read permissions');
-SELECT hasnt_table_privilege('anon', 'public.organization_roles', 'SELECT', 'anon cannot read organization roles');
-SELECT hasnt_table_privilege('anon', 'public.organization_role_permissions', 'SELECT', 'anon cannot read role permissions');
-SELECT hasnt_table_privilege('anon', 'public.organization_member_roles', 'SELECT', 'anon cannot read member roles');
-SELECT hasnt_table_privilege('anon', 'public.platform_admins', 'SELECT', 'anon cannot read platform administrators');
+SELECT ok(NOT has_table_privilege('anon', 'public.organizations', 'SELECT'), 'anon cannot read organizations');
+SELECT ok(NOT has_table_privilege('anon', 'public.organization_members', 'SELECT'), 'anon cannot read organization members');
+SELECT ok(NOT has_table_privilege('anon', 'public.permissions', 'SELECT'), 'anon cannot read permissions');
+SELECT ok(NOT has_table_privilege('anon', 'public.organization_roles', 'SELECT'), 'anon cannot read organization roles');
+SELECT ok(NOT has_table_privilege('anon', 'public.organization_role_permissions', 'SELECT'), 'anon cannot read role permissions');
+SELECT ok(NOT has_table_privilege('anon', 'public.organization_member_roles', 'SELECT'), 'anon cannot read member roles');
+SELECT ok(NOT has_table_privilege('anon', 'public.platform_admins', 'SELECT'), 'anon cannot read platform administrators');
 
-SELECT hasnt_table_privilege(
-  'authenticated',
-  'public.platform_admins',
-  'INSERT',
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.platform_admins', 'INSERT'),
   'authenticated users cannot create platform administrators'
 );
 
-SELECT hasnt_table_privilege(
-  'authenticated',
-  'public.organization_role_permissions',
-  'INSERT',
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.organization_role_permissions', 'INSERT'),
   'authenticated users cannot create role-permission mappings'
 );
 
-SELECT hasnt_table_privilege(
-  'authenticated',
-  'public.organization_role_permissions',
-  'UPDATE',
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.organization_role_permissions', 'UPDATE'),
   'authenticated users cannot alter role-permission mappings'
 );
 
-SELECT hasnt_table_privilege(
-  'authenticated',
-  'public.organization_member_roles',
-  'INSERT',
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.organization_member_roles', 'INSERT'),
   'authenticated users cannot create member-role mappings'
 );
 
-SELECT hasnt_table_privilege(
-  'authenticated',
-  'public.organization_member_roles',
-  'DELETE',
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.organization_member_roles', 'DELETE'),
   'authenticated users cannot remove member-role mappings'
 );
 

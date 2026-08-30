@@ -165,16 +165,46 @@ SELECT is(
   'platform_admins has no browser policy'
 );
 
-SELECT has_table_privilege('authenticated', 'public.organization_members', 'SELECT', 'authenticated can select organization memberships');
-SELECT hasnt_table_privilege('authenticated', 'public.organization_members', 'INSERT', 'authenticated cannot insert organization memberships');
-SELECT hasnt_table_privilege('authenticated', 'public.organization_members', 'UPDATE', 'authenticated cannot update organization memberships');
-SELECT hasnt_table_privilege('authenticated', 'public.organization_members', 'DELETE', 'authenticated cannot delete organization memberships');
-SELECT hasnt_table_privilege('authenticated', 'public.organization_roles', 'INSERT', 'authenticated cannot insert organization roles');
-SELECT hasnt_table_privilege('authenticated', 'public.organization_role_permissions', 'INSERT', 'authenticated cannot insert role-permission mappings');
-SELECT hasnt_table_privilege('authenticated', 'public.organization_role_permissions', 'UPDATE', 'authenticated cannot update role-permission mappings');
-SELECT hasnt_table_privilege('authenticated', 'public.organization_member_roles', 'INSERT', 'authenticated cannot insert member-role mappings');
-SELECT hasnt_table_privilege('authenticated', 'public.platform_admins', 'SELECT', 'authenticated cannot read platform_admins');
-SELECT hasnt_table_privilege('authenticated', 'public.platform_admins', 'INSERT', 'authenticated cannot create platform_admins');
+SELECT ok(
+  has_table_privilege('authenticated', 'public.organization_members', 'SELECT'),
+  'authenticated can select organization memberships'
+);
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.organization_members', 'INSERT'),
+  'authenticated cannot insert organization memberships'
+);
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.organization_members', 'UPDATE'),
+  'authenticated cannot update organization memberships'
+);
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.organization_members', 'DELETE'),
+  'authenticated cannot delete organization memberships'
+);
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.organization_roles', 'INSERT'),
+  'authenticated cannot insert organization roles'
+);
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.organization_role_permissions', 'INSERT'),
+  'authenticated cannot insert role-permission mappings'
+);
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.organization_role_permissions', 'UPDATE'),
+  'authenticated cannot update role-permission mappings'
+);
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.organization_member_roles', 'INSERT'),
+  'authenticated cannot insert member-role mappings'
+);
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.platform_admins', 'SELECT'),
+  'authenticated cannot read platform_admins'
+);
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.platform_admins', 'INSERT'),
+  'authenticated cannot create platform_admins'
+);
 
 -- ============ OWNER ACCESS ============
 
