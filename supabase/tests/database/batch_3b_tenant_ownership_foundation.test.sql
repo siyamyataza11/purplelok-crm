@@ -388,8 +388,9 @@ SELECT throws_ok(
   $sql$
     DO $case$
     BEGIN
-      INSERT INTO public.clients (company_name)
-      VALUES ('Batch 3B unexpected extra client');
+      INSERT INTO public.clients (company_name, created_at, updated_at)
+      SELECT 'Batch 3B unexpected extra client', min(created_at), min(created_at)
+        FROM public.clients;
       PERFORM public.batch_3b_assert_seed_manifest();
     END
     $case$
@@ -748,17 +749,118 @@ SELECT throws_ok(
   'a second tenant cannot yet reuse a ticket number'
 );
 
+WITH expected(
+  constraint_name,
+  child_table,
+  definition,
+  match_type,
+  update_action,
+  is_validated,
+  is_deferrable,
+  is_initially_deferred
+) AS (VALUES
+  ('client_contacts_client_organization_fkey', 'client_contacts',
+    'FOREIGN KEY (client_id, organization_id) REFERENCES clients(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('client_notes_client_organization_fkey', 'client_notes',
+    'FOREIGN KEY (client_id, organization_id) REFERENCES clients(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('leads_client_organization_fkey', 'leads',
+    'FOREIGN KEY (client_id, organization_id) REFERENCES clients(id, organization_id)',
+    's', 'a', true, false, false),
+  ('quotes_client_organization_fkey', 'quotes',
+    'FOREIGN KEY (client_id, organization_id) REFERENCES clients(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('quote_items_quote_organization_fkey', 'quote_items',
+    'FOREIGN KEY (quote_id, organization_id) REFERENCES quotes(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('invoices_client_organization_fkey', 'invoices',
+    'FOREIGN KEY (client_id, organization_id) REFERENCES clients(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('invoices_quote_organization_fkey', 'invoices',
+    'FOREIGN KEY (quote_id, organization_id) REFERENCES quotes(id, organization_id) ON DELETE SET NULL (quote_id)',
+    's', 'a', true, false, false),
+  ('invoice_items_invoice_organization_fkey', 'invoice_items',
+    'FOREIGN KEY (invoice_id, organization_id) REFERENCES invoices(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('payments_invoice_organization_fkey', 'payments',
+    'FOREIGN KEY (invoice_id, organization_id) REFERENCES invoices(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('payments_client_organization_fkey', 'payments',
+    'FOREIGN KEY (client_id, organization_id) REFERENCES clients(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('projects_client_organization_fkey', 'projects',
+    'FOREIGN KEY (client_id, organization_id) REFERENCES clients(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('project_milestones_project_organization_fkey', 'project_milestones',
+    'FOREIGN KEY (project_id, organization_id) REFERENCES projects(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('tasks_project_organization_fkey', 'tasks',
+    'FOREIGN KEY (project_id, organization_id) REFERENCES projects(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('tasks_client_organization_fkey', 'tasks',
+    'FOREIGN KEY (client_id, organization_id) REFERENCES clients(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('task_comments_task_organization_fkey', 'task_comments',
+    'FOREIGN KEY (task_id, organization_id) REFERENCES tasks(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('meetings_project_organization_fkey', 'meetings',
+    'FOREIGN KEY (project_id, organization_id) REFERENCES projects(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('meetings_client_organization_fkey', 'meetings',
+    'FOREIGN KEY (client_id, organization_id) REFERENCES clients(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('documents_folder_organization_fkey', 'documents',
+    'FOREIGN KEY (folder_id, organization_id) REFERENCES documents(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('documents_client_organization_fkey', 'documents',
+    'FOREIGN KEY (client_id, organization_id) REFERENCES clients(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('tickets_client_organization_fkey', 'tickets',
+    'FOREIGN KEY (client_id, organization_id) REFERENCES clients(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('ticket_messages_ticket_organization_fkey', 'ticket_messages',
+    'FOREIGN KEY (ticket_id, organization_id) REFERENCES tickets(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false),
+  ('messages_channel_organization_fkey', 'messages',
+    'FOREIGN KEY (channel_id, organization_id) REFERENCES channels(id, organization_id) ON DELETE CASCADE',
+    's', 'a', true, false, false)
+),
+live AS (
+  SELECT c.conname,
+         child.relname,
+         pg_get_constraintdef(c.oid, true),
+         c.confmatchtype::text,
+         c.confupdtype::text,
+         c.convalidated,
+         c.condeferrable,
+         c.condeferred
+    FROM pg_constraint c
+    JOIN pg_class child ON child.oid = c.conrelid
+    JOIN pg_namespace child_ns ON child_ns.oid = child.relnamespace
+    JOIN pg_class parent ON parent.oid = c.confrelid
+    JOIN pg_namespace parent_ns ON parent_ns.oid = parent.relnamespace
+   WHERE child_ns.nspname = 'public'
+     AND parent_ns.nspname = 'public'
+     AND c.contype = 'f'
+     AND c.conname LIKE '%_organization_fkey'
+     AND child.relname = ANY (ARRAY[
+       'clients', 'client_contacts', 'client_notes', 'leads', 'quotes',
+       'quote_items', 'invoices', 'invoice_items', 'payments', 'projects',
+       'project_milestones', 'tasks', 'task_comments', 'meetings', 'documents',
+       'tickets', 'ticket_messages', 'activities', 'notifications', 'channels',
+       'messages'
+     ])
+),
+differences AS (
+  (SELECT * FROM expected EXCEPT ALL SELECT * FROM live)
+  UNION ALL
+  (SELECT * FROM live EXCEPT ALL SELECT * FROM expected)
+)
 SELECT is(
-  (SELECT count(*)::integer
-     FROM pg_constraint c
-     JOIN pg_class r ON r.oid = c.conrelid
-     JOIN pg_namespace n ON n.oid = r.relnamespace
-    WHERE n.nspname = 'public'
-      AND c.contype = 'f'
-      AND cardinality(c.conkey) = 2
-      AND c.conname LIKE '%_organization_fkey'),
-  22,
-  'all 22 composite tenant foreign keys exist'
+  (SELECT count(*)::integer FROM differences),
+  0,
+  'exact Batch 3B composite tenant foreign key set and definitions exist'
 );
 
 SELECT is(
