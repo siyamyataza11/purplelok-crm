@@ -1,6 +1,9 @@
 name: Isolated database validation
 
 on:
+  push:
+    branches:
+      - security/multi-tenant-rbac
   workflow_dispatch:
 
 permissions:

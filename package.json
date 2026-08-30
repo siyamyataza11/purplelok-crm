@@ -16,6 +16,7 @@
     "test:frontend:pure": "tsx --test tests/frontend/*.test.ts",
     "test:frontend:integration": "vitest run tests/frontend/batch4-organization-context.integration.test.tsx",
     "test:provisioning": "tsx --test scripts/provisioning/tenant-provisioning.test.ts scripts/provisioning/member-provisioning.test.ts",
+    "check:tenant-queries": "node --experimental-strip-types scripts/check-domain-query-baseline.ts",
     "provision:purplelok": "tsx scripts/provision-purplelok.ts",
     "provision:purplelok-demo": "tsx scripts/provision-purplelok-demo.ts",
     "provision:member": "tsx scripts/provision-member.ts"

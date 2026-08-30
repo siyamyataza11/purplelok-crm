@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { OrganizationProvider, useOrganization } from '@/context/OrganizationContext';
+import { TenantDataProvider } from '@/context/TenantDataContext';
 import { ToastProvider } from '@/components/ui/Toast';
 import { Button } from '@/components/ui/Button';
 import { AuthScreen } from '@/components/auth/AuthScreen';
@@ -177,9 +178,11 @@ export default function App() {
   return (
     <AuthProvider>
       <OrganizationProvider>
-        <ToastProvider>
-          <AppContent />
-        </ToastProvider>
+        <TenantDataProvider>
+          <ToastProvider>
+            <AppContent />
+          </ToastProvider>
+        </TenantDataProvider>
       </OrganizationProvider>
     </AuthProvider>
   );

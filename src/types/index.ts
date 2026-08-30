@@ -22,7 +22,14 @@ export interface Profile {
   updated_at: string;
 }
 
-export interface Client {
+export interface TenantOwnedRecord {
+  organization_id: string;
+}
+
+export type TenantMutationInput<T extends TenantOwnedRecord> =
+  Omit<T, 'organization_id'> & { organization_id?: never };
+
+export interface Client extends TenantOwnedRecord {
   id: string;
   company_name: string;
   logo_url: string | null;
@@ -47,7 +54,7 @@ export interface Client {
   updated_at: string;
 }
 
-export interface ClientContact {
+export interface ClientContact extends TenantOwnedRecord {
   id: string;
   client_id: string;
   name: string;
@@ -58,7 +65,7 @@ export interface ClientContact {
   created_at: string;
 }
 
-export interface ClientNote {
+export interface ClientNote extends TenantOwnedRecord {
   id: string;
   client_id: string;
   author_id: string | null;
@@ -69,7 +76,7 @@ export interface ClientNote {
 
 export type LeadStage = 'new_lead' | 'contacted' | 'proposal_sent' | 'negotiating' | 'won' | 'lost';
 
-export interface Lead {
+export interface Lead extends TenantOwnedRecord {
   id: string;
   company_name: string;
   contact_name: string | null;
@@ -90,7 +97,7 @@ export interface Lead {
 
 export type QuoteStatus = 'draft' | 'sent' | 'accepted' | 'rejected' | 'expired';
 
-export interface Quote {
+export interface Quote extends TenantOwnedRecord {
   id: string;
   quote_number: string;
   client_id: string;
@@ -112,7 +119,7 @@ export interface Quote {
   items?: QuoteItem[];
 }
 
-export interface QuoteItem {
+export interface QuoteItem extends TenantOwnedRecord {
   id: string;
   quote_id: string;
   description: string;
@@ -124,7 +131,7 @@ export interface QuoteItem {
 
 export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'partial' | 'overdue' | 'cancelled';
 
-export interface Invoice {
+export interface Invoice extends TenantOwnedRecord {
   id: string;
   invoice_number: string;
   client_id: string;
@@ -150,7 +157,7 @@ export interface Invoice {
   items?: InvoiceItem[];
 }
 
-export interface InvoiceItem {
+export interface InvoiceItem extends TenantOwnedRecord {
   id: string;
   invoice_id: string;
   description: string;
@@ -160,7 +167,7 @@ export interface InvoiceItem {
   created_at: string;
 }
 
-export interface Payment {
+export interface Payment extends TenantOwnedRecord {
   id: string;
   invoice_id: string;
   client_id: string;
@@ -175,7 +182,7 @@ export type ProjectType = 'website' | 'printing' | 'branding' | 'email' | 'hosti
 export type ProjectStatus = 'planning' | 'in_progress' | 'review' | 'completed' | 'on_hold' | 'cancelled';
 export type ProjectHealth = 'on_track' | 'at_risk' | 'delayed' | 'completed';
 
-export interface Project {
+export interface Project extends TenantOwnedRecord {
   id: string;
   name: string;
   client_id: string;
@@ -196,7 +203,7 @@ export interface Project {
   assigned_profiles?: Profile[];
 }
 
-export interface ProjectMilestone {
+export interface ProjectMilestone extends TenantOwnedRecord {
   id: string;
   project_id: string;
   title: string;
@@ -210,7 +217,7 @@ export interface ProjectMilestone {
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 export type TaskStatus = 'todo' | 'in_progress' | 'review' | 'done';
 
-export interface Task {
+export interface Task extends TenantOwnedRecord {
   id: string;
   title: string;
   description: string | null;
@@ -230,7 +237,7 @@ export interface Task {
   client?: Client | null;
 }
 
-export interface TaskComment {
+export interface TaskComment extends TenantOwnedRecord {
   id: string;
   task_id: string;
   author_id: string | null;
@@ -241,7 +248,7 @@ export interface TaskComment {
 
 export type MeetingType = 'meeting' | 'deadline' | 'call' | 'site_visit' | 'collection' | 'launch' | 'milestone';
 
-export interface Meeting {
+export interface Meeting extends TenantOwnedRecord {
   id: string;
   title: string;
   type: MeetingType;
@@ -257,7 +264,7 @@ export interface Meeting {
   client?: Client | null;
 }
 
-export interface DocumentItem {
+export interface DocumentItem extends TenantOwnedRecord {
   id: string;
   name: string;
   type: 'file' | 'folder' | 'contract' | 'invoice' | 'quote' | 'logo' | 'image' | 'video' | 'template';
@@ -276,7 +283,7 @@ export interface DocumentItem {
 export type TicketPriority = 'low' | 'medium' | 'high' | 'urgent';
 export type TicketStatus = 'open' | 'in_progress' | 'resolved' | 'closed';
 
-export interface Ticket {
+export interface Ticket extends TenantOwnedRecord {
   id: string;
   ticket_number: string;
   subject: string;
@@ -293,7 +300,7 @@ export interface Ticket {
   assigned_to_profile?: Profile | null;
 }
 
-export interface TicketMessage {
+export interface TicketMessage extends TenantOwnedRecord {
   id: string;
   ticket_id: string;
   author_id: string | null;
@@ -303,7 +310,7 @@ export interface TicketMessage {
   author?: Profile | null;
 }
 
-export interface Activity {
+export interface Activity extends TenantOwnedRecord {
   id: string;
   user_id: string | null;
   type: string;
@@ -315,7 +322,7 @@ export interface Activity {
   user?: Profile | null;
 }
 
-export interface Notification {
+export interface Notification extends TenantOwnedRecord {
   id: string;
   user_id: string | null;
   title: string;
@@ -326,7 +333,7 @@ export interface Notification {
   created_at: string;
 }
 
-export interface Channel {
+export interface Channel extends TenantOwnedRecord {
   id: string;
   name: string;
   description: string | null;
@@ -334,7 +341,7 @@ export interface Channel {
   created_at: string;
 }
 
-export interface ChatMessage {
+export interface ChatMessage extends TenantOwnedRecord {
   id: string;
   channel_id: string;
   author_id: string | null;

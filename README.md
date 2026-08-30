@@ -13,3 +13,19 @@ values in browser assets.
 
 Node 22 LTS is the repository default (`.nvmrc`); supported Node releases are
 declared in `package.json`.
+
+## Batch 5A tenant data foundation
+
+New domain work must use `useTenantData()` rather than direct Supabase domain
+queries. The tenant layer derives ownership only from the resolved
+`OrganizationContext`, scopes every operation, and rejects mismatched returned
+rows. Page and workflow capability checks remain required; later tenant RLS is
+the authoritative database boundary. The checked-in legacy-query guard records
+the existing 90 calls until later Batch 5 conversions reduce that number.
+
+Temporary authorization semantics are deliberately narrow: Calendar uses
+`projects.read`/`projects.write`; Chat requires active organization membership;
+Activities are side effects of already-authorized workflows. Reports and PURPLE
+AI require `reports.read` plus each source capability (for example,
+`invoices.read` for invoice data). Chat and Calendar need dedicated capabilities
+before Client access can be enabled, and Client provisioning remains disabled.

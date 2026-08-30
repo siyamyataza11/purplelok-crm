@@ -34,4 +34,20 @@ export default tseslint.config(
       'react-refresh/only-export-components': 'off',
     },
   },
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: [
+      'src/context/TenantDataContext.tsx',
+      'src/lib/tenant-data.ts',
+      'src/lib/tenant-data-internal.ts',
+    ],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: ['@/lib/tenant-data-internal', '**/tenant-data-internal'],
+          message: 'Tenant authority internals may only be imported by TenantDataContext.',
+        }],
+      }],
+    },
+  },
 );
