@@ -34,6 +34,10 @@ vi.mock('@/lib/supabase', () => ({
       if (!testDependencies.client) throw new Error('Fake Supabase client is not configured');
       return testDependencies.client.from(table);
     },
+    rpc: (functionName: string) => {
+      if (!testDependencies.client) throw new Error('Fake Supabase client is not configured');
+      return testDependencies.client.rpc(functionName);
+    },
   },
 }));
 
@@ -47,6 +51,7 @@ import { PermissionGate } from '@/components/auth/PermissionGate';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ToastProvider } from '@/components/ui/Toast';
 import { OrganizationProvider, useOrganization } from '@/context/OrganizationContext';
+import { TenantDataProvider } from '@/context/TenantDataContext';
 import { PERMISSION_KEYS, type PermissionKey } from '@/lib/authorization';
 import { ProjectsPage } from '@/pages/Projects';
 
@@ -121,6 +126,10 @@ class FakeSupabase {
 
   from(table: string) {
     return new FakeQuery(this, table);
+  }
+
+  rpc(functionName: string) {
+    return new FakeQuery(this, `rpc:${functionName}`);
   }
 }
 
@@ -210,6 +219,8 @@ function datasetHandler(
       }
       case 'permissions':
         return ok(PERMISSION_KEYS.map((key) => ({ key })));
+      case 'rpc:get_organization_member_directory':
+        return ok([{ organization_id: 'a', membership_id: 'member-user-a-a', user_id: 'team-user', full_name: 'Team Member', email: 'team@example.test', job_title: null, avatar_url: null }]);
       case 'projects':
       case 'clients':
       case 'profiles':
@@ -504,7 +515,7 @@ describe('Batch 4 organization authorization integration', () => {
   });
 
   it('projects.write without projects.manage cannot assign team members or submit assigned_to', async () => {
-    const client = projectClient(['projects.read', 'projects.write']);
+    const client = projectClient(['clients.read', 'projects.read', 'projects.write']);
     testDependencies.client = client;
     renderProjectPage();
     await openProjectModal();
@@ -517,7 +528,7 @@ describe('Batch 4 organization authorization integration', () => {
   });
 
   it('projects.write without projects.manage cannot submit health changes', async () => {
-    const client = projectClient(['projects.read', 'projects.write'], [sampleProject()]);
+    const client = projectClient(['clients.read', 'projects.read', 'projects.write'], [sampleProject()]);
     testDependencies.client = client;
     renderProjectPage();
     fireEvent.click(await screen.findByText('Managed Project'));
@@ -530,7 +541,7 @@ describe('Batch 4 organization authorization integration', () => {
   });
 
   it('projects.manage enables assignment and health management with enforced payloads', async () => {
-    const client = projectClient(['projects.read', 'projects.write', 'projects.manage'], [sampleProject()]);
+    const client = projectClient(['clients.read', 'projects.read', 'projects.write', 'projects.manage'], [sampleProject()]);
     testDependencies.client = client;
     renderProjectPage();
     await openProjectModal();
@@ -552,6 +563,7 @@ describe('Batch 4 organization authorization integration', () => {
 function sampleProject() {
   return {
     id: 'project-1',
+    organization_id: 'a',
     name: 'Managed Project',
     client_id: 'client-1',
     type: 'website',
@@ -573,10 +585,13 @@ function sampleProject() {
 function projectClient(permissions: PermissionKey[], projects: ReturnType<typeof sampleProject>[] = []) {
   const data = baseDataset(permissions);
   return new FakeSupabase(datasetHandler(data, (query) => {
+    if (query.table === 'projects' && query.operation === 'insert') return ok([{ id: 'project-new', organization_id: 'a' }]);
+    if (query.table === 'projects' && query.operation === 'update') return ok([{ id: 'project-1', organization_id: 'a' }]);
     if (query.operation !== 'select') return ok(null);
     if (query.table === 'projects') return ok(projects);
     if (query.table === 'clients') return ok([{
       id: 'client-1',
+      organization_id: 'a',
       company_name: 'Client One',
     }]);
     if (query.table === 'profiles') return ok([{
@@ -591,11 +606,19 @@ function projectClient(permissions: PermissionKey[], projects: ReturnType<typeof
 function renderProjectPage() {
   return render(
     <OrganizationProvider>
-      <ToastProvider>
-        <ProjectsPage />
-      </ToastProvider>
+      <TenantDataProvider>
+        <ToastProvider>
+          <ProjectWhenReady />
+        </ToastProvider>
+      </TenantDataProvider>
     </OrganizationProvider>,
   );
+}
+
+function ProjectWhenReady() {
+  const { currentOrganization, isOrganizationLoading } = useOrganization();
+  if (isOrganizationLoading || !currentOrganization) return null;
+  return <ProjectsPage />;
 }
 
 async function openProjectModal() {
@@ -615,5 +638,5 @@ async function createProject() {
 function findMutation(client: FakeSupabase, operation: 'insert' | 'update') {
   const query = client.requests.find((request) => request.table === 'projects' && request.operation === operation);
   if (!query) throw new Error(`No projects ${operation} request was recorded`);
-  return query.payload as Record<string, unknown>;
+  return (Array.isArray(query.payload) ? query.payload[0] : query.payload) as Record<string, unknown>;
 }

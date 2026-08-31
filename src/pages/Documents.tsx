@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useCallback, useState, useEffect, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useTenantData } from '@/context/TenantDataContext';
 import { useToast } from '@/components/ui/Toast';
 import type { DocumentItem, Client } from '@/types';
 import { Card } from '@/components/ui/Card';
@@ -9,8 +9,8 @@ import { Input, Select } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { formatDate, cn } from '@/lib/utils';
-import { Plus, FolderOpen, File, FileText, Image, Video, Upload, Search, Download } from 'lucide-react';
+import { formatDate } from '@/lib/utils';
+import { Plus, FolderOpen, File, FileText, Image, Video, Search, Download } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
 import { useOrganization } from '@/context/OrganizationContext';
@@ -28,9 +28,8 @@ const TYPE_ICONS: Record<string, React.ReactNode> = {
 };
 
 export function DocumentsPage() {
-  const { profile } = useAuth();
-  const { add } = useToast();
   const { hasPermission } = useOrganization();
+  const tenant = useTenantData();
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,18 +37,21 @@ export function DocumentsPage() {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
-    const [dRes, cRes] = await Promise.all([
-      supabase.from('documents').select('*, client:clients(*)').order('created_at', { ascending: false }),
-      supabase.from('clients').select('*').order('company_name'),
+    setDocuments([]); setClients([]);
+    const documentProjection = hasPermission('clients.read') ? '*, client:clients(*)' : '*';
+    const [documentRows, clientRows] = await Promise.all([
+      tenant.table('documents').select<DocumentItem>(documentProjection, { order: [{ column: 'created_at', ascending: false }] }),
+      hasPermission('clients.read')
+        ? tenant.table('clients').select<Client>('*', { order: [{ column: 'company_name' }] })
+        : Promise.resolve([]),
     ]);
-    setDocuments((dRes.data as DocumentItem[]) ?? []);
-    setClients((cRes.data as Client[]) ?? []);
+    setDocuments(documentRows); setClients(clientRows);
     setLoading(false);
-  }
+  }, [hasPermission, tenant]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const filtered = useMemo(() => documents.filter((d) => {
     const matchesSearch = !search || d.name.toLowerCase().includes(search.toLowerCase());
@@ -121,21 +123,27 @@ export function DocumentsPage() {
 function DocumentModal({ open, onClose, clients, onSaved }: { open: boolean; onClose: () => void; clients: Client[]; onSaved: () => void }) {
   const { profile } = useAuth();
   const { add } = useToast();
+  const tenant = useTenantData();
+  const { hasPermission } = useOrganization();
   const [form, setForm] = useState<Partial<DocumentItem>>({ type: 'file' });
   const [saving, setSaving] = useState(false);
 
   async function handleSave() {
     setSaving(true);
     try {
-      const { error } = await supabase.from('documents').insert({
+      if (!hasPermission(ACTION_PERMISSIONS.documentsWrite)) throw new Error('Document write permission is required');
+      if (form.client_id) await tenant.assertTenantRecord('clients', form.client_id);
+      await tenant.table('documents').insert({
         name: form.name,
         type: form.type || 'file',
         client_id: form.client_id || null,
         file_url: form.file_url,
         mime_type: form.mime_type,
-        uploaded_by: profile?.id,
+        uploaded_by: profile?.id ?? null,
+        folder_id: null,
+        file_size: null,
+        version: 1,
       });
-      if (error) throw error;
       add('success', 'Document added');
       onSaved();
     } catch (err) {

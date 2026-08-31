@@ -1,17 +1,16 @@
-import { useState, useEffect, useMemo } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useCallback, useState, useEffect, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useTenantData } from '@/context/TenantDataContext';
+import type { OrganizationMemberDirectoryEntry } from '@/lib/tenant-data';
 import { useToast } from '@/components/ui/Toast';
-import type { Task, Profile, TaskStatus, TaskPriority, Client, Project } from '@/types';
-import { Card } from '@/components/ui/Card';
+import type { Task, TaskStatus, TaskPriority, Client, Project } from '@/types';
 import { Button } from '@/components/ui/Button';
 import { Input, Textarea, Select } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
-import { EmptyState } from '@/components/ui/EmptyState';
 import { formatDate, cn, isToday, isOverdue } from '@/lib/utils';
-import { Plus, CheckSquare, Check, Clock, Flag, User } from 'lucide-react';
+import { Plus, Check, Clock } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
 import { useOrganization } from '@/context/OrganizationContext';
@@ -34,30 +33,38 @@ export function TasksPage() {
   const { profile } = useAuth();
   const { add } = useToast();
   const { hasPermission } = useOrganization();
+  const tenant = useTenantData();
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [members, setMembers] = useState<OrganizationMemberDirectoryEntry[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [filter, setFilter] = useState<'all' | 'mine' | 'today' | 'overdue'>('all');
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
-    const [tRes, uRes, cRes, pRes] = await Promise.all([
-      supabase.from('tasks').select('*, assigned_to_profile:profiles!tasks_assigned_to_fkey(*), project:projects(*), client:clients(*)').order('created_at', { ascending: false }),
-      supabase.from('profiles').select('*').order('full_name'),
-      supabase.from('clients').select('*').order('company_name'),
-      supabase.from('projects').select('*').order('name'),
+    setTasks([]); setMembers([]); setClients([]); setProjects([]);
+    const canReadClients = hasPermission('clients.read');
+    const canReadProjects = hasPermission('projects.read');
+    const taskProjection = canReadClients && canReadProjects
+      ? '*, project:projects(*), client:clients(*)'
+      : canReadClients
+        ? '*, client:clients(*)'
+        : canReadProjects
+          ? '*, project:projects(*)'
+          : '*';
+    const [taskRows, memberRows, clientRows, projectRows] = await Promise.all([
+      tenant.table('tasks').select<Task>(taskProjection, { order: [{ column: 'created_at', ascending: false }] }),
+      tenant.members.listActive(),
+      hasPermission('clients.read') ? tenant.table('clients').select<Client>('*', { order: [{ column: 'company_name' }] }) : Promise.resolve([]),
+      hasPermission('projects.read') ? tenant.table('projects').select<Project>('*', { order: [{ column: 'name' }] }) : Promise.resolve([]),
     ]);
-    setTasks((tRes.data as Task[]) ?? []);
-    setProfiles((uRes.data as Profile[]) ?? []);
-    setClients((cRes.data as Client[]) ?? []);
-    setProjects((pRes.data as Project[]) ?? []);
+    setTasks(taskRows); setMembers(memberRows); setClients(clientRows); setProjects(projectRows);
     setLoading(false);
-  }
+  }, [hasPermission, tenant]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const filtered = useMemo(() => {
     return tasks.filter((t) => {
@@ -76,7 +83,7 @@ export function TasksPage() {
 
   async function moveTask(task: Task, status: TaskStatus) {
     if (!hasPermission(ACTION_PERMISSIONS.tasksWrite)) return;
-    await supabase.from('tasks').update({ status }).eq('id', task.id);
+    await tenant.table('tasks').updateById(task.id, { status });
     setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, status } : t)));
     add('success', 'Task updated');
   }
@@ -137,10 +144,10 @@ export function TasksPage() {
                           </span>
                         )}
                       </div>
-                      {t.assigned_to_profile && (
+                      {t.assigned_to && members.find((member) => member.user_id === t.assigned_to) && (
                         <div className="flex items-center gap-1.5 mt-2 pl-6">
-                          <Avatar name={t.assigned_to_profile.full_name} src={t.assigned_to_profile.avatar_url} size="xs" />
-                          <span className="text-xs text-tertiary">{t.assigned_to_profile.full_name}</span>
+                          <Avatar name={members.find((member) => member.user_id === t.assigned_to)?.full_name} src={members.find((member) => member.user_id === t.assigned_to)?.avatar_url} size="xs" />
+                          <span className="text-xs text-tertiary">{members.find((member) => member.user_id === t.assigned_to)?.full_name}</span>
                         </div>
                       )}
                       {hasPermission(ACTION_PERMISSIONS.tasksWrite) && <div className="flex gap-1 mt-2 pl-6 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -159,32 +166,39 @@ export function TasksPage() {
         </div>
       )}
 
-      <TaskModal open={showModal && hasPermission(ACTION_PERMISSIONS.tasksWrite)} onClose={() => setShowModal(false)} profiles={profiles} clients={clients} projects={projects} onSaved={() => { setShowModal(false); load(); }} />
+      <TaskModal open={showModal && hasPermission(ACTION_PERMISSIONS.tasksWrite)} onClose={() => setShowModal(false)} members={members} clients={clients} projects={projects} onSaved={() => { setShowModal(false); void load(); }} />
     </div>
   );
 }
 
-function TaskModal({ open, onClose, profiles, clients, projects, onSaved }: { open: boolean; onClose: () => void; profiles: Profile[]; clients: Client[]; projects: Project[]; onSaved: () => void }) {
+function TaskModal({ open, onClose, members, clients, projects, onSaved }: { open: boolean; onClose: () => void; members: OrganizationMemberDirectoryEntry[]; clients: Client[]; projects: Project[]; onSaved: () => void }) {
   const { profile } = useAuth();
   const { add } = useToast();
+  const tenant = useTenantData();
+  const { hasPermission } = useOrganization();
   const [form, setForm] = useState<Partial<Task>>({ priority: 'medium', status: 'todo' });
   const [saving, setSaving] = useState(false);
 
   async function handleSave() {
     setSaving(true);
     try {
-      const { error } = await supabase.from('tasks').insert({
+      if (!hasPermission(ACTION_PERMISSIONS.tasksWrite)) throw new Error('Task write permission is required');
+      if (form.project_id) await tenant.assertTenantRecord('projects', form.project_id);
+      if (form.client_id) await tenant.assertTenantRecord('clients', form.client_id);
+      if (form.assigned_to) await tenant.members.assertActive(form.assigned_to);
+      await tenant.table('tasks').insert({
         title: form.title,
         description: form.description,
         project_id: form.project_id || null,
         client_id: form.client_id || null,
         assigned_to: form.assigned_to || null,
-        created_by: profile?.id,
+        created_by: profile?.id ?? null,
         priority: form.priority || 'medium',
         status: 'todo',
         deadline: form.deadline,
+        recurring: false,
+        recurrence_pattern: null,
       });
-      if (error) throw error;
       add('success', 'Task created');
       onSaved();
     } catch (err) {
@@ -203,7 +217,7 @@ function TaskModal({ open, onClose, profiles, clients, projects, onSaved }: { op
         <div className="grid grid-cols-2 gap-4">
           <Select label="Assign To" value={form.assigned_to || ''} onChange={(e) => setForm({ ...form, assigned_to: e.target.value })}>
             <option value="">Unassigned</option>
-            {profiles.map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+            {members.map((member) => <option key={member.membership_id} value={member.user_id}>{member.full_name}</option>)}
           </Select>
           <Select label="Priority" value={form.priority || 'medium'} onChange={(e) => setForm({ ...form, priority: e.target.value as TaskPriority })}>
             <option value="low">Low</option>

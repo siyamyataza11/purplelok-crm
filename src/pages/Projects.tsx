@@ -1,8 +1,10 @@
-import { useState, useEffect, useMemo } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useCallback, useState, useEffect, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useTenantData } from '@/context/TenantDataContext';
+import { buildProjectProgressUpdate } from '@/lib/tenant-domain-workflows';
+import type { OrganizationMemberDirectoryEntry } from '@/lib/tenant-data';
 import { useToast } from '@/components/ui/Toast';
-import type { Project, Client, Profile, ProjectMilestone, ProjectStatus, ProjectType, ProjectHealth } from '@/types';
+import type { Project, Client, ProjectMilestone, ProjectStatus, ProjectType, ProjectHealth } from '@/types';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input, Textarea, Select } from '@/components/ui/Input';
@@ -44,9 +46,10 @@ const HEALTH_CONFIG: Record<ProjectHealth, { label: string; variant: 'success' |
 export function ProjectsPage() {
   const { add } = useToast();
   const { hasPermission } = useOrganization();
+  const tenant = useTenantData();
   const [projects, setProjects] = useState<Project[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [members, setMembers] = useState<OrganizationMemberDirectoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<View>('board');
   const [selected, setSelected] = useState<Project | null>(null);
@@ -55,20 +58,20 @@ export function ProjectsPage() {
   const [dragOverStatus, setDragOverStatus] = useState<ProjectStatus | null>(null);
   const [typeFilter, setTypeFilter] = useState('all');
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
-    const [pRes, cRes, uRes] = await Promise.all([
-      supabase.from('projects').select('*, client:clients(*)').order('created_at', { ascending: false }),
-      supabase.from('clients').select('*').order('company_name'),
-      supabase.from('profiles').select('*').order('full_name'),
+    setProjects([]); setClients([]); setMembers([]);
+    const projectProjection = hasPermission('clients.read') ? '*, client:clients(*)' : '*';
+    const [projectRows, clientRows, memberRows] = await Promise.all([
+      tenant.table('projects').select<Project>(projectProjection, { order: [{ column: 'created_at', ascending: false }] }),
+      hasPermission('clients.read') ? tenant.table('clients').select<Client>('*', { order: [{ column: 'company_name' }] }) : Promise.resolve([]),
+      tenant.members.listActive(),
     ]);
-    setProjects((pRes.data as Project[]) ?? []);
-    setClients((cRes.data as Client[]) ?? []);
-    setProfiles((uRes.data as Profile[]) ?? []);
+    setProjects(projectRows); setClients(clientRows); setMembers(memberRows);
     setLoading(false);
-  }
+  }, [hasPermission, tenant]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const filtered = useMemo(() => projects.filter((p) => typeFilter === 'all' || p.type === typeFilter), [projects, typeFilter]);
 
@@ -85,7 +88,7 @@ export function ProjectsPage() {
     if (!proj || proj.status === status) { setDraggedId(null); setDragOverStatus(null); return; }
     const newProgress = status === 'completed' ? 100 : status === 'review' ? 80 : status === 'in_progress' ? 40 : proj.progress;
     const newHealth = status === 'completed' ? 'completed' : proj.health;
-    await supabase.from('projects').update({ status, progress: newProgress, health: newHealth }).eq('id', draggedId);
+    await tenant.table('projects').updateById(draggedId, { status, progress: newProgress, health: newHealth });
     setProjects((prev) => prev.map((p) => (p.id === draggedId ? { ...p, status, progress: newProgress, health: newHealth } : p)));
     add('success', `Project moved to ${status.replace('_', ' ')}`);
     setDraggedId(null);
@@ -93,7 +96,7 @@ export function ProjectsPage() {
   }
 
   if (view === 'detail' && selected) {
-    return <ProjectDetail project={selected} profiles={profiles} onBack={() => { setView('board'); setSelected(null); }} onUpdated={load} />;
+    return <ProjectDetail project={selected} members={members} onBack={() => { setView('board'); setSelected(null); }} onUpdated={load} />;
   }
 
   return (
@@ -180,15 +183,16 @@ export function ProjectsPage() {
         </div>
       )}
 
-      <ProjectModal open={showModal && hasPermission(ACTION_PERMISSIONS.projectsWrite)} onClose={() => setShowModal(false)} clients={clients} profiles={profiles} onSaved={() => { setShowModal(false); load(); }} />
+      <ProjectModal open={showModal && hasPermission(ACTION_PERMISSIONS.projectsWrite)} onClose={() => setShowModal(false)} clients={clients} members={members} onSaved={() => { setShowModal(false); void load(); }} />
     </div>
   );
 }
 
-function ProjectModal({ open, onClose, clients, profiles, onSaved }: { open: boolean; onClose: () => void; clients: Client[]; profiles: Profile[]; onSaved: () => void }) {
+function ProjectModal({ open, onClose, clients, members, onSaved }: { open: boolean; onClose: () => void; clients: Client[]; members: OrganizationMemberDirectoryEntry[]; onSaved: () => void }) {
   const { profile } = useAuth();
   const { add } = useToast();
   const { hasPermission } = useOrganization();
+  const tenant = useTenantData();
   const [form, setForm] = useState<Partial<Project>>({ type: 'website', status: 'planning', progress: 0, health: 'on_track' });
   const [assignedTo, setAssignedTo] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -199,7 +203,12 @@ function ProjectModal({ open, onClose, clients, profiles, onSaved }: { open: boo
     const canManageProjects = hasPermission(ACTION_PERMISSIONS.projectsManage);
     setSaving(true);
     try {
-      const { error } = await supabase.from('projects').insert({
+      if (!form.client_id) throw new Error('A tenant client is required');
+      await tenant.assertTenantRecord('clients', form.client_id);
+      if (canManageProjects) {
+        await Promise.all(assignedTo.map((userId) => tenant.members.assertActive(userId)));
+      }
+      const [project] = await tenant.table('projects').insert({
         name: form.name,
         client_id: form.client_id,
         type: form.type || 'other',
@@ -208,12 +217,11 @@ function ProjectModal({ open, onClose, clients, profiles, onSaved }: { open: boo
         due_date: form.due_date,
         budget: form.budget || 0,
         progress: 0,
-        created_by: profile?.id,
+        created_by: profile?.id ?? null,
         ...(canManageProjects ? { assigned_to: assignedTo } : {}),
-      });
-      if (error) throw error;
+      }, { returning: 'id' });
+      await tenant.table('activities').insert({ user_id: profile?.id ?? null, type: 'project_created', entity: 'project', entity_id: project.id, description: `created project "${form.name}"`, metadata: null });
       add('success', 'Project created');
-      await supabase.from('activities').insert({ user_id: profile?.id, type: 'project_created', entity: 'project', description: `created project "${form.name}"` });
       onSaved();
     } catch (err) {
       add('error', (err as Error).message);
@@ -244,10 +252,10 @@ function ProjectModal({ open, onClose, clients, profiles, onSaved }: { open: boo
           <div>
             <label className="label-text block mb-2">Assign Team Members</label>
             <div className="grid grid-cols-2 gap-2">
-              {profiles.map((p) => (
-                <label key={p.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted cursor-pointer">
-                  <input type="checkbox" checked={assignedTo.includes(p.id)} onChange={(e) => setAssignedTo(e.target.checked ? [...assignedTo, p.id] : assignedTo.filter((id) => id !== p.id))} className="w-4 h-4 accent-purple" />
-                  <span className="text-sm text-secondary">{p.full_name}</span>
+              {members.map((member) => (
+                <label key={member.membership_id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted cursor-pointer">
+                  <input aria-label={member.full_name} type="checkbox" checked={assignedTo.includes(member.user_id)} onChange={(e) => setAssignedTo(e.target.checked ? [...assignedTo, member.user_id] : assignedTo.filter((id) => id !== member.user_id))} className="w-4 h-4 accent-purple" />
+                  <span className="text-sm text-secondary">{member.full_name}</span>
                 </label>
               ))}
             </div>
@@ -258,9 +266,10 @@ function ProjectModal({ open, onClose, clients, profiles, onSaved }: { open: boo
   );
 }
 
-function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Project; profiles: Profile[]; onBack: () => void; onUpdated: () => void }) {
+function ProjectDetail({ project, members, onBack, onUpdated }: { project: Project; members: OrganizationMemberDirectoryEntry[]; onBack: () => void; onUpdated: () => void }) {
   const { add } = useToast();
   const { hasPermission } = useOrganization();
+  const tenant = useTenantData();
   const [milestones, setMilestones] = useState<ProjectMilestone[]>([]);
   const [newMilestone, setNewMilestone] = useState('');
   const [progress, setProgress] = useState(project.progress);
@@ -268,17 +277,19 @@ function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Proj
 
   useEffect(() => {
     async function load() {
-      const { data } = await supabase.from('project_milestones').select('*').eq('project_id', project.id).order('created_at');
-      setMilestones((data as ProjectMilestone[]) ?? []);
+      setMilestones([]);
+      await tenant.assertTenantRecord('projects', project.id);
+      const rows = await tenant.table('project_milestones').select<ProjectMilestone>('*', { filters: [{ operator: 'eq', column: 'project_id', value: project.id }], order: [{ column: 'created_at' }] });
+      setMilestones(rows);
     }
-    load();
-  }, [project.id]);
+    void load();
+  }, [project.id, tenant]);
 
   async function addMilestone() {
     if (!hasPermission(ACTION_PERMISSIONS.projectsWrite)) return;
     if (!newMilestone.trim()) return;
-    const { data, error } = await supabase.from('project_milestones').insert({ project_id: project.id, title: newMilestone }).select('*').single();
-    if (error) { add('error', error.message); return; }
+    await tenant.assertTenantRecord('projects', project.id);
+    const [data] = await tenant.table('project_milestones').insert({ project_id: project.id, title: newMilestone }, { returning: '*' });
     setMilestones((prev) => [...prev, data as ProjectMilestone]);
     setNewMilestone('');
     add('success', 'Milestone added');
@@ -286,25 +297,23 @@ function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Proj
 
   async function toggleMilestone(m: ProjectMilestone) {
     if (!hasPermission(ACTION_PERMISSIONS.projectsWrite)) return;
-    await supabase.from('project_milestones').update({ completed: !m.completed, completed_at: !m.completed ? new Date().toISOString() : null }).eq('id', m.id);
+    await tenant.assertTenantRecord('projects', project.id);
+    await tenant.table('project_milestones').updateById(m.id, { completed: !m.completed, completed_at: !m.completed ? new Date().toISOString() : null });
     setMilestones((prev) => prev.map((x) => (x.id === m.id ? { ...x, completed: !x.completed } : x)));
   }
 
   async function updateProgress() {
     if (!hasPermission(ACTION_PERMISSIONS.projectsWrite)) return;
     const canManageProjects = hasPermission(ACTION_PERMISSIONS.projectsManage);
-    await supabase
-      .from('projects')
-      .update({
-        progress,
-        ...(canManageProjects ? { health } : {}),
-      })
-      .eq('id', project.id);
+    await tenant.table('projects').updateById(
+      project.id,
+      buildProjectProgressUpdate(progress, health, canManageProjects),
+    );
     add('success', 'Project updated');
     onUpdated();
   }
 
-  const assignedMembers = profiles.filter((p) => project.assigned_to?.includes(p.id));
+  const assignedMembers = members.filter((member) => project.assigned_to?.includes(member.user_id));
   const completedMilestones = milestones.filter((m) => m.completed).length;
 
   return (
@@ -398,7 +407,7 @@ function ProjectDetail({ project, profiles, onBack, onUpdated }: { project: Proj
             ) : (
               <div className="space-y-2">
                 {assignedMembers.map((m) => (
-                  <div key={m.id} className="flex items-center gap-2">
+                  <div key={m.membership_id} className="flex items-center gap-2">
                     <div className="w-7 h-7 rounded-full bg-purple-600 flex items-center justify-center text-xs font-semibold text-white">{m.full_name?.[0] || '?'}</div>
                     <span className="text-sm text-secondary">{m.full_name}</span>
                   </div>

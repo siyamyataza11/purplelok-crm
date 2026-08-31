@@ -62,12 +62,12 @@ export const PAGE_PERMISSIONS: Record<AppPage, PermissionKey | null> = {
   invoices: 'invoices.read',
   projects: 'projects.read',
   tasks: 'tasks.read',
-  calendar: null,
+  calendar: 'projects.read',
   tickets: 'tickets.read',
   documents: 'documents.read',
   chat: null,
   reports: 'reports.read',
-  assistant: null,
+  assistant: 'reports.read',
   settings: 'settings.read',
 };
 
@@ -128,4 +128,3 @@ export function authorizedPages(
 ): AppPage[] {
   return pages.filter((page) => canAccessPage(page, permissions));
 }
-

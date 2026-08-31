@@ -1,13 +1,16 @@
 import { useState, useEffect, useMemo } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useOrganization } from '@/context/OrganizationContext';
+import { useTenantData } from '@/context/TenantDataContext';
+import { readTenantSource } from '@/lib/tenant-domain-workflows';
 import type { Invoice, Payment, Project, Client, Lead, Task } from '@/types';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
-import { Badge } from '@/components/ui/Badge';
-import { formatCurrency, formatNumber, isThisMonth, isOverdue } from '@/lib/utils';
-import { TrendingUp, DollarSign, Users, Target, Briefcase, CheckCircle2, Clock, AlertCircle, BarChart3 } from 'lucide-react';
+import { formatCurrency, isThisMonth } from '@/lib/utils';
+import { TrendingUp, DollarSign, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export function ReportsPage() {
+  const tenant = useTenantData();
+  const { hasPermission } = useOrganization();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -18,24 +21,23 @@ export function ReportsPage() {
 
   useEffect(() => {
     async function load() {
+      setInvoices([]); setPayments([]); setProjects([]);
+      setClients([]); setLeads([]); setTasks([]);
+      const invoiceProjection = hasPermission('clients.read') ? '*, client:clients(*)' : '*';
       const [i, p, pr, c, l, t] = await Promise.all([
-        supabase.from('invoices').select('*, client:clients(*)'),
-        supabase.from('payments').select('*'),
-        supabase.from('projects').select('*'),
-        supabase.from('clients').select('*'),
-        supabase.from('leads').select('*'),
-        supabase.from('tasks').select('*'),
+        readTenantSource(hasPermission('invoices.read'), () => tenant.table('invoices').select<Invoice>(invoiceProjection)),
+        readTenantSource(hasPermission('payments.read'), () => tenant.table('payments').select<Payment>()),
+        readTenantSource(hasPermission('projects.read'), () => tenant.table('projects').select<Project>()),
+        readTenantSource(hasPermission('clients.read'), () => tenant.table('clients').select<Client>()),
+        readTenantSource(hasPermission('leads.read'), () => tenant.table('leads').select<Lead>()),
+        readTenantSource(hasPermission('tasks.read'), () => tenant.table('tasks').select<Task>()),
       ]);
-      setInvoices((i.data as Invoice[]) ?? []);
-      setPayments((p.data as Payment[]) ?? []);
-      setProjects((pr.data as Project[]) ?? []);
-      setClients((c.data as Client[]) ?? []);
-      setLeads((l.data as Lead[]) ?? []);
-      setTasks((t.data as Task[]) ?? []);
+      setInvoices(i); setPayments(p); setProjects(pr);
+      setClients(c); setLeads(l); setTasks(t);
       setLoading(false);
     }
-    load();
-  }, []);
+    void load();
+  }, [hasPermission, tenant]);
 
   const metrics = useMemo(() => {
     const monthlyRevenue = payments.filter((p) => isThisMonth(p.paid_at)).reduce((s, p) => s + p.amount, 0);

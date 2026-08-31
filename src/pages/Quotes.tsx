@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useCallback, useState, useEffect, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useTenantData } from '@/context/TenantDataContext';
 import { useToast } from '@/components/ui/Toast';
-import type { Quote, QuoteItem, Client, Invoice } from '@/types';
+import type { Quote, QuoteItem, Client } from '@/types';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input, Textarea, Select } from '@/components/ui/Input';
@@ -19,6 +19,7 @@ type View = 'list' | 'detail' | 'create';
 export function QuotesPage() {
   const { add } = useToast();
   const { hasPermission, hasAllPermissions } = useOrganization();
+  const tenant = useTenantData();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,18 +27,19 @@ export function QuotesPage() {
   const [selected, setSelected] = useState<Quote | null>(null);
   const [statusFilter, setStatusFilter] = useState('all');
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
-    const [qRes, cRes] = await Promise.all([
-      supabase.from('quotes').select('*, client:clients(*)').order('created_at', { ascending: false }),
-      supabase.from('clients').select('*').order('company_name'),
+    setQuotes([]); setClients([]);
+    const quoteProjection = hasPermission('clients.read') ? '*, client:clients(*)' : '*';
+    const [quoteRows, clientRows] = await Promise.all([
+      tenant.table('quotes').select<Quote>(quoteProjection, { order: [{ column: 'created_at', ascending: false }] }),
+      hasPermission('clients.read') ? tenant.table('clients').select<Client>('*', { order: [{ column: 'company_name' }] }) : Promise.resolve([]),
     ]);
-    setQuotes((qRes.data as Quote[]) ?? []);
-    setClients((cRes.data as Client[]) ?? []);
+    setQuotes(quoteRows); setClients(clientRows);
     setLoading(false);
-  }
+  }, [hasPermission, tenant]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const filtered = useMemo(() => {
     return quotes.filter((q) => statusFilter === 'all' || q.status === statusFilter);
@@ -45,8 +47,10 @@ export function QuotesPage() {
 
   async function convertToInvoice(q: Quote) {
     if (!hasPermission(ACTION_PERMISSIONS.invoicesWrite)) return;
+    await tenant.assertTenantRecord('quotes', q.id);
+    await tenant.assertTenantRecord('clients', q.client_id);
     const invoiceNumber = generateNumber('INV');
-    const { data, error } = await supabase.from('invoices').insert({
+    const [invoice] = await tenant.table('invoices').insert({
       invoice_number: invoiceNumber,
       client_id: q.client_id,
       quote_id: q.id,
@@ -60,13 +64,11 @@ export function QuotesPage() {
       balance: q.total,
       issue_date: new Date().toISOString().slice(0, 10),
       due_date: new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10),
-    }).select().single();
-    if (error) { add('error', error.message); return; }
-    const invoice = data as Invoice;
+    }, { returning: '*' });
     // Copy items
-    const { data: items } = await supabase.from('quote_items').select('*').eq('quote_id', q.id);
-    if (items) {
-      await supabase.from('invoice_items').insert(
+    const items = await tenant.table('quote_items').select<QuoteItem>('*', { filters: [{ operator: 'eq', column: 'quote_id', value: q.id }] });
+    if (items.length > 0) {
+      await tenant.table('invoice_items').insert(
         items.map((i) => ({ invoice_id: invoice.id, description: i.description, quantity: i.quantity, unit_price: i.unit_price, total: i.total }))
       );
     }
@@ -75,23 +77,26 @@ export function QuotesPage() {
 
   async function convertToProject(q: Quote) {
     if (!hasAllPermissions([ACTION_PERMISSIONS.projectsWrite, ACTION_PERMISSIONS.quotesApprove])) return;
-    const { error } = await supabase.from('projects').insert({
+    await tenant.assertTenantRecord('quotes', q.id);
+    await tenant.assertTenantRecord('clients', q.client_id);
+    await tenant.table('projects').insert({
       name: q.title,
       client_id: q.client_id,
       type: 'other',
       budget: q.total,
       progress: 0,
     });
-    if (error) { add('error', error.message); return; }
+    await tenant.table('quotes').updateById(q.id, { status: 'accepted' });
     add('success', 'Project created from quote');
-    await supabase.from('quotes').update({ status: 'accepted' }).eq('id', q.id);
-    load();
+    await load();
   }
 
   async function duplicateQuote(q: Quote) {
     if (!hasPermission(ACTION_PERMISSIONS.quotesWrite)) return;
+    await tenant.assertTenantRecord('quotes', q.id);
+    await tenant.assertTenantRecord('clients', q.client_id);
     const newNum = generateNumber('QUO');
-    const { data, error } = await supabase.from('quotes').insert({
+    const [duplicate] = await tenant.table('quotes').insert({
       quote_number: newNum,
       client_id: q.client_id,
       title: `${q.title} (Copy)`,
@@ -102,28 +107,27 @@ export function QuotesPage() {
       total: q.total,
       vat_rate: q.vat_rate,
       terms: q.terms,
-    }).select().single();
-    if (error) { add('error', error.message); return; }
-    const { data: items } = await supabase.from('quote_items').select('*').eq('quote_id', q.id);
-    if (items && items.length > 0) {
-      await supabase.from('quote_items').insert(items.map((i) => ({ quote_id: (data as Quote).id, description: i.description, quantity: i.quantity, unit_price: i.unit_price, total: i.total })));
+    }, { returning: 'id' });
+    const items = await tenant.table('quote_items').select<QuoteItem>('*', { filters: [{ operator: 'eq', column: 'quote_id', value: q.id }] });
+    if (items.length > 0) {
+      await tenant.table('quote_items').insert(items.map((i) => ({ quote_id: duplicate.id, description: i.description, quantity: i.quantity, unit_price: i.unit_price, total: i.total })));
     }
     add('success', 'Quote duplicated');
-    load();
+    await load();
   }
 
   async function sendQuote(q: Quote) {
     if (!hasPermission(ACTION_PERMISSIONS.quotesWrite)) return;
-    await supabase.from('quotes').update({ status: 'sent' }).eq('id', q.id);
+    await tenant.table('quotes').updateById(q.id, { status: 'sent' });
     add('success', 'Quote marked as sent');
-    load();
+    await load();
   }
 
   async function acceptQuote(q: Quote) {
     if (!hasPermission(ACTION_PERMISSIONS.quotesApprove)) return;
-    await supabase.from('quotes').update({ status: 'accepted', approved_by_client: true, approved_at: new Date().toISOString() }).eq('id', q.id);
+    await tenant.table('quotes').updateById(q.id, { status: 'accepted', approved_by_client: true, approved_at: new Date().toISOString() });
     add('success', 'Quote accepted');
-    load();
+    await load();
   }
 
   if (view === 'detail' && selected) {
@@ -192,6 +196,8 @@ export function QuotesPage() {
 function QuoteCreate({ clients, onBack, onCreated }: { clients: Client[]; onBack: () => void; onCreated: () => void }) {
   const { profile } = useAuth();
   const { add } = useToast();
+  const tenant = useTenantData();
+  const { hasPermission } = useOrganization();
   const [clientId, setClientId] = useState('');
   const [title, setTitle] = useState('');
   const [items, setItems] = useState<Partial<QuoteItem>[]>([{ description: '', quantity: 1, unit_price: 0, total: 0 }]);
@@ -224,8 +230,10 @@ function QuoteCreate({ clients, onBack, onCreated }: { clients: Client[]; onBack
     if (!clientId || !title) { add('error', 'Please select a client and add a title'); return; }
     setSaving(true);
     try {
+      if (!hasPermission(ACTION_PERMISSIONS.quotesWrite)) throw new Error('Quote write permission is required');
+      await tenant.assertTenantRecord('clients', clientId);
       const quoteNumber = generateNumber('QUO');
-      const { data, error } = await supabase.from('quotes').insert({
+      const [quote] = await tenant.table('quotes').insert({
         quote_number: quoteNumber,
         client_id: clientId,
         title,
@@ -237,14 +245,12 @@ function QuoteCreate({ clients, onBack, onCreated }: { clients: Client[]; onBack
         vat_rate: vatRate,
         terms,
         valid_until: validUntil,
-        created_by: profile?.id,
-      }).select().single();
-      if (error) throw error;
-      const quote = data as Quote;
+        created_by: profile?.id ?? null,
+      }, { returning: 'id' });
       if (items.length > 0) {
-        await supabase.from('quote_items').insert(items.map((i) => ({ quote_id: quote.id, description: i.description, quantity: i.quantity, unit_price: i.unit_price, total: i.total })));
+        await tenant.table('quote_items').insert(items.map((i) => ({ quote_id: quote.id, description: i.description, quantity: i.quantity, unit_price: i.unit_price, total: i.total })));
       }
-      await supabase.from('activities').insert({ user_id: profile?.id, type: 'quote_created', entity: 'quote', entity_id: quote.id, description: `created quote ${quoteNumber} for ${clients.find(c => c.id === clientId)?.company_name}` });
+      await tenant.table('activities').insert({ user_id: profile?.id ?? null, type: 'quote_created', entity: 'quote', entity_id: quote.id, description: `created quote ${quoteNumber} for ${clients.find(c => c.id === clientId)?.company_name}`, metadata: null });
       add('success', 'Quote created');
       onCreated();
     } catch (err) {
@@ -337,14 +343,17 @@ function QuoteDetail({ quote, onBack, onConvertInvoice, onConvertProject, onDupl
 }) {
   const [items, setItems] = useState<QuoteItem[]>([]);
   const { hasPermission, hasAllPermissions } = useOrganization();
+  const tenant = useTenantData();
 
   useEffect(() => {
     async function loadItems() {
-      const { data } = await supabase.from('quote_items').select('*').eq('quote_id', quote.id).order('created_at');
-      setItems((data as QuoteItem[]) ?? []);
+      setItems([]);
+      await tenant.assertTenantRecord('quotes', quote.id);
+      const rows = await tenant.table('quote_items').select<QuoteItem>('*', { filters: [{ operator: 'eq', column: 'quote_id', value: quote.id }], order: [{ column: 'created_at' }] });
+      setItems(rows);
     }
-    loadItems();
-  }, [quote.id]);
+    void loadItems();
+  }, [quote.id, tenant]);
 
   return (
     <div className="p-6 space-y-6 animate-fade-in max-w-[1000px] mx-auto">

@@ -1,13 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { useDashboardData, computeMetrics } from '@/hooks/useDashboardData';
-import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
-import { formatCurrency, isThisMonth, isToday, isOverdue, formatDate, timeAgo } from '@/lib/utils';
-import { Sparkles, Send, TrendingUp, AlertCircle, FileText, DollarSign, Users, Briefcase, Zap, Clock } from 'lucide-react';
+import { formatCurrency, isToday, isOverdue, formatDate } from '@/lib/utils';
+import { Sparkles, Send, TrendingUp, AlertCircle, DollarSign, Users, Briefcase, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface AIMessage {
@@ -37,7 +35,7 @@ export function AssistantPage() {
       role: 'assistant',
       content: `Hello ${profile?.full_name?.split(' ')[0] || 'there'}! I'm PURPLE AI, your business assistant. I can analyze your CRM data, summarize client histories, draft quotes, flag overdue invoices, predict project timelines, and answer questions about your business performance. What would you like to know?`,
     }]);
-  }, [profile?.id]);
+  }, [profile?.full_name, profile?.id]);
 
   useEffect(() => {
     msgEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -159,7 +157,6 @@ export function AssistantPage() {
 
     // Upselling
     if (q.includes('upsell') || q.includes('opportunity') || q.includes('recommend')) {
-      const clientsWithWebsites = d.clients.filter(c => c.tags?.includes('website'));
       const clientsWithoutHosting = d.projects.filter(p => p.type === 'website' && p.status === 'completed').map(p => p.client_id);
       const opportunities: string[] = [];
       if (clientsWithoutHosting.length > 0) opportunities.push(`${clientsWithoutHosting.length} completed website clients who may need hosting/maintenance plans`);

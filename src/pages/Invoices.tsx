@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useCallback, useState, useEffect, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useTenantData } from '@/context/TenantDataContext';
 import { useToast } from '@/components/ui/Toast';
 import type { Invoice, InvoiceItem, Client, Payment } from '@/types';
 import { Card } from '@/components/ui/Card';
@@ -20,6 +20,7 @@ type View = 'list' | 'detail' | 'create';
 export function InvoicesPage() {
   const { add } = useToast();
   const { hasPermission, hasAllPermissions } = useOrganization();
+  const tenant = useTenantData();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -29,28 +30,33 @@ export function InvoicesPage() {
   const [showPayment, setShowPayment] = useState(false);
   const [payInvoice, setPayInvoice] = useState<Invoice | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
-    const [iRes, cRes] = await Promise.all([
-      supabase.from('invoices').select('*, client:clients(*)').order('created_at', { ascending: false }),
-      supabase.from('clients').select('*').order('company_name'),
+    setInvoices([]); setClients([]);
+    const invoiceProjection = hasPermission('clients.read') ? '*, client:clients(*)' : '*';
+    const [invoiceRows, clientRows] = await Promise.all([
+      tenant.table('invoices').select<Invoice>(invoiceProjection, { order: [{ column: 'created_at', ascending: false }] }),
+      hasPermission('clients.read') ? tenant.table('clients').select<Client>('*', { order: [{ column: 'company_name' }] }) : Promise.resolve([]),
     ]);
-    setInvoices((iRes.data as Invoice[]) ?? []);
-    setClients((cRes.data as Client[]) ?? []);
+    setInvoices(invoiceRows); setClients(clientRows);
     setLoading(false);
-  }
+  }, [hasPermission, tenant]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   // Auto-flag overdue
   useEffect(() => {
     if (invoices.length === 0 || !hasPermission(ACTION_PERMISSIONS.invoicesApprove)) return;
-    invoices.forEach(async (inv) => {
+    const overdueInvoices = invoices.filter((inv) =>
+      inv.status === 'sent' && Boolean(inv.due_date && isOverdue(inv.due_date)));
+    if (overdueInvoices.length === 0) return;
+    void Promise.all(overdueInvoices.map(async (inv) => {
       if (inv.status === 'sent' && inv.due_date && isOverdue(inv.due_date)) {
-        await supabase.from('invoices').update({ status: 'overdue' }).eq('id', inv.id);
+        await tenant.table('invoices').updateById(inv.id, { status: 'overdue' });
       }
-    });
-  }, [hasPermission, invoices]);
+    })).then(() => setInvoices((current) => current.map((inv) =>
+      overdueInvoices.some(({ id }) => id === inv.id) ? { ...inv, status: 'overdue' } : inv)));
+  }, [hasPermission, invoices, tenant]);
 
   const filtered = useMemo(() => invoices.filter((i) => statusFilter === 'all' || i.status === statusFilter), [invoices, statusFilter]);
 
@@ -62,33 +68,34 @@ export function InvoicesPage() {
 
   async function recordPayment(inv: Invoice, amount: number, method: string, reference: string) {
     if (!hasAllPermissions([ACTION_PERMISSIONS.paymentsRecord, ACTION_PERMISSIONS.invoicesWrite])) return;
-    const { error } = await supabase.from('payments').insert({
+    await tenant.assertTenantRecord('invoices', inv.id);
+    await tenant.assertTenantRecord('clients', inv.client_id);
+    await tenant.table('payments').insert({
       invoice_id: inv.id,
       client_id: inv.client_id,
       amount,
       method,
       reference,
     });
-    if (error) { add('error', error.message); return; }
     const newPaid = inv.amount_paid + amount;
     const newBalance = inv.total - newPaid;
     const newStatus = newBalance <= 0 ? 'paid' : 'partial';
-    await supabase.from('invoices').update({ amount_paid: newPaid, balance: newBalance, status: newStatus }).eq('id', inv.id);
+    await tenant.table('invoices').updateById(inv.id, { amount_paid: newPaid, balance: newBalance, status: newStatus });
     add('success', `Payment of ${formatCurrency(amount)} recorded`);
     setShowPayment(false);
     setPayInvoice(null);
-    load();
+    await load();
   }
 
   async function sendInvoice(inv: Invoice) {
     if (!hasPermission(ACTION_PERMISSIONS.invoicesApprove)) return;
-    await supabase.from('invoices').update({ status: 'sent' }).eq('id', inv.id);
+    await tenant.table('invoices').updateById(inv.id, { status: 'sent' });
     add('success', 'Invoice sent to client');
-    load();
+    await load();
   }
 
   if (view === 'detail' && selected) {
-    return <InvoiceDetail invoice={selected} onBack={() => { setView('list'); setSelected(null); }} onPay={() => { setPayInvoice(selected); setShowPayment(true); }} onSend={sendInvoice} onUpdated={load} />;
+    return <InvoiceDetail invoice={selected} onBack={() => { setView('list'); setSelected(null); }} onPay={() => { setPayInvoice(selected); setShowPayment(true); }} onSend={sendInvoice} />;
   }
 
   if (view === 'create') {
@@ -212,6 +219,8 @@ function PaymentModal({ invoice, onClose, onPay }: { invoice: Invoice; onClose: 
 function InvoiceCreate({ clients, onBack, onCreated }: { clients: Client[]; onBack: () => void; onCreated: () => void }) {
   const { profile } = useAuth();
   const { add } = useToast();
+  const tenant = useTenantData();
+  const { hasPermission } = useOrganization();
   const [clientId, setClientId] = useState('');
   const [title, setTitle] = useState('');
   const [items, setItems] = useState<Partial<InvoiceItem>[]>([{ description: '', quantity: 1, unit_price: 0, total: 0 }]);
@@ -242,8 +251,10 @@ function InvoiceCreate({ clients, onBack, onCreated }: { clients: Client[]; onBa
     if (!clientId || !title) { add('error', 'Select a client and add a title'); return; }
     setSaving(true);
     try {
+      if (!hasPermission(ACTION_PERMISSIONS.invoicesWrite)) throw new Error('Invoice write permission is required');
+      await tenant.assertTenantRecord('clients', clientId);
       const invoiceNumber = generateNumber('INV');
-      const { data, error } = await supabase.from('invoices').insert({
+      const [invoice] = await tenant.table('invoices').insert({
         invoice_number: invoiceNumber,
         client_id: clientId,
         title,
@@ -255,12 +266,10 @@ function InvoiceCreate({ clients, onBack, onCreated }: { clients: Client[]; onBa
         recurring,
         recurring_interval: recurring ? 'monthly' : null,
         notes,
-        created_by: profile?.id,
-      }).select().single();
-      if (error) throw error;
-      const inv = data as Invoice;
+        created_by: profile?.id ?? null,
+      }, { returning: 'id' });
       if (items.length > 0) {
-        await supabase.from('invoice_items').insert(items.map((i) => ({ invoice_id: inv.id, description: i.description, quantity: i.quantity, unit_price: i.unit_price, total: i.total })));
+        await tenant.table('invoice_items').insert(items.map((i) => ({ invoice_id: invoice.id, description: i.description, quantity: i.quantity, unit_price: i.unit_price, total: i.total })));
       }
       add('success', 'Invoice created');
       onCreated();
@@ -330,31 +339,32 @@ function InvoiceCreate({ clients, onBack, onCreated }: { clients: Client[]; onBa
   );
 }
 
-function InvoiceDetail({ invoice, onBack, onPay, onSend, onUpdated }: {
+function InvoiceDetail({ invoice, onBack, onPay, onSend }: {
   invoice: Invoice;
   onBack: () => void;
   onPay: () => void;
   onSend: (inv: Invoice) => void;
-  onUpdated: () => void;
 }) {
   const [items, setItems] = useState<InvoiceItem[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const { hasPermission, hasAllPermissions } = useOrganization();
+  const tenant = useTenantData();
 
   useEffect(() => {
     async function load() {
+      setItems([]); setPayments([]);
+      await tenant.assertTenantRecord('invoices', invoice.id);
       const paymentsQuery = hasPermission(ACTION_PERMISSIONS.paymentsRead)
-        ? supabase.from('payments').select('*').eq('invoice_id', invoice.id).order('paid_at', { ascending: false })
-        : Promise.resolve({ data: [] });
-      const [iRes, pRes] = await Promise.all([
-        supabase.from('invoice_items').select('*').eq('invoice_id', invoice.id),
+        ? tenant.table('payments').select<Payment>('*', { filters: [{ operator: 'eq', column: 'invoice_id', value: invoice.id }], order: [{ column: 'paid_at', ascending: false }] })
+        : Promise.resolve([]);
+      const [itemRows, paymentRows] = await Promise.all([
+        tenant.table('invoice_items').select<InvoiceItem>('*', { filters: [{ operator: 'eq', column: 'invoice_id', value: invoice.id }] }),
         paymentsQuery,
       ]);
-      setItems((iRes.data as InvoiceItem[]) ?? []);
-      setPayments((pRes.data as Payment[]) ?? []);
+      setItems(itemRows); setPayments(paymentRows);
     }
-    load();
-  }, [hasPermission, invoice.id]);
+    void load();
+  }, [hasPermission, invoice.id, tenant]);
 
   return (
     <div className="p-6 space-y-6 animate-fade-in max-w-[1000px] mx-auto">

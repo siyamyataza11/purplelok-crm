@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useCallback, useState, useEffect, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useTenantData } from '@/context/TenantDataContext';
+import type { OrganizationMemberDirectoryEntry } from '@/lib/tenant-data';
 import { useToast } from '@/components/ui/Toast';
-import type { Client, ClientNote, Profile, Invoice, Quote, Project, Task } from '@/types';
-import { Card, CardBody } from '@/components/ui/Card';
+import type { Client, ClientNote, Invoice, Quote, Project, Task } from '@/types';
+import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input, Textarea, Select } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
@@ -23,7 +24,6 @@ import {
   Globe,
   Tag,
   Trash2,
-  Edit3,
   ArrowLeft,
   FileText,
   Receipt,
@@ -39,9 +39,8 @@ import { useOrganization } from '@/context/OrganizationContext';
 type View = 'list' | 'detail';
 
 export function ClientsPage({ initialQuery = '' }: { initialQuery?: string }) {
-  const { profile } = useAuth();
-  const { add } = useToast();
   const { hasPermission } = useOrganization();
+  const tenant = useTenantData();
   const [view, setView] = useState<View>('list');
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,16 +50,17 @@ export function ClientsPage({ initialQuery = '' }: { initialQuery?: string }) {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Client | null>(null);
 
-  async function loadClients() {
+  const loadClients = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase.from('clients').select('*').order('created_at', { ascending: false });
-    setClients((data as Client[]) ?? []);
+    setClients([]);
+    const data = await tenant.table('clients').select<Client>('*', { order: [{ column: 'created_at', ascending: false }] });
+    setClients(data);
     setLoading(false);
-  }
+  }, [tenant]);
 
   useEffect(() => {
-    loadClients();
-  }, []);
+    void loadClients();
+  }, [loadClients]);
 
   const filtered = useMemo(() => {
     return clients.filter((c) => {
@@ -76,7 +76,7 @@ export function ClientsPage({ initialQuery = '' }: { initialQuery?: string }) {
 
   async function toggleFavorite(c: Client) {
     if (!hasPermission(ACTION_PERMISSIONS.clientsWrite)) return;
-    await supabase.from('clients').update({ favorite: !c.favorite }).eq('id', c.id);
+    await tenant.table('clients').updateById(c.id, { favorite: !c.favorite });
     setClients((prev) => prev.map((x) => (x.id === c.id ? { ...x, favorite: !x.favorite } : x)));
   }
 
@@ -88,7 +88,6 @@ export function ClientsPage({ initialQuery = '' }: { initialQuery?: string }) {
           setView('list');
           setSelectedClient(null);
         }}
-        onUpdated={() => loadClients()}
       />
     );
   }
@@ -224,6 +223,8 @@ function ClientModal({
 }) {
   const { profile } = useAuth();
   const { add } = useToast();
+  const tenant = useTenantData();
+  const { hasPermission } = useOrganization();
   const [form, setForm] = useState<Partial<Client>>({});
   const [saving, setSaving] = useState(false);
 
@@ -238,8 +239,9 @@ function ClientModal({
   async function handleSave() {
     setSaving(true);
     try {
+      if (!hasPermission(ACTION_PERMISSIONS.clientsWrite)) throw new Error('Client write permission is required');
       if (client) {
-        const { error } = await supabase.from('clients').update({
+        await tenant.table('clients').updateById(client.id, {
           company_name: form.company_name,
           contact_person: form.contact_person,
           email: form.email,
@@ -254,11 +256,10 @@ function ClientModal({
           status: form.status,
           notes: form.notes,
           tags: form.tags,
-        }).eq('id', client.id);
-        if (error) throw error;
+        });
         add('success', 'Client updated');
       } else {
-        const { error } = await supabase.from('clients').insert({
+        const [created] = await tenant.table('clients').insert({
           company_name: form.company_name,
           contact_person: form.contact_person,
           email: form.email,
@@ -274,18 +275,19 @@ function ClientModal({
           notes: form.notes,
           tags: form.tags || [],
           satisfaction_score: 5,
-          created_by: profile?.id,
-        });
-        if (error) throw error;
-        add('success', 'Client created');
+          created_by: profile?.id ?? null,
+        }, { returning: 'id' });
 
         // Log activity
-        await supabase.from('activities').insert({
-          user_id: profile?.id,
+        await tenant.table('activities').insert({
+          user_id: profile?.id ?? null,
           type: 'client_created',
           entity: 'client',
+          entity_id: created.id,
           description: `created client "${form.company_name}"`,
+          metadata: null,
         });
+        add('success', 'Client created');
       }
       onSaved();
     } catch (err) {
@@ -341,10 +343,11 @@ function ClientModal({
   );
 }
 
-function ClientDetail({ client, onBack, onUpdated }: { client: Client; onBack: () => void; onUpdated: () => void }) {
+function ClientDetail({ client, onBack }: { client: Client; onBack: () => void }) {
   const { profile } = useAuth();
   const { add } = useToast();
   const { hasPermission } = useOrganization();
+  const tenant = useTenantData();
   const [tab, setTab] = useState<'overview' | 'notes' | 'invoices' | 'quotes' | 'projects' | 'tasks'>('overview');
   const [notes, setNotes] = useState<ClientNote[]>([]);
   const [newNote, setNewNote] = useState('');
@@ -352,34 +355,39 @@ function ClientDetail({ client, onBack, onUpdated }: { client: Client; onBack: (
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [members, setMembers] = useState<OrganizationMemberDirectoryEntry[]>([]);
 
   useEffect(() => {
     async function load() {
-      const [notesRes, invRes, qRes, pRes, tRes] = await Promise.all([
-        supabase.from('client_notes').select('*, author:profiles(*)').eq('client_id', client.id).order('created_at', { ascending: false }),
-        supabase.from('invoices').select('*').eq('client_id', client.id).order('created_at', { ascending: false }),
-        supabase.from('quotes').select('*').eq('client_id', client.id).order('created_at', { ascending: false }),
-        supabase.from('projects').select('*').eq('client_id', client.id).order('created_at', { ascending: false }),
-        supabase.from('tasks').select('*, assigned_to_profile:profiles!tasks_assigned_to_fkey(*)').eq('client_id', client.id).order('created_at', { ascending: false }),
+      setNotes([]); setInvoices([]); setQuotes([]); setProjects([]); setTasks([]); setMembers([]);
+      await tenant.assertTenantRecord('clients', client.id);
+      const related = {
+        filters: [{ operator: 'eq' as const, column: 'client_id', value: client.id }],
+        order: [{ column: 'created_at', ascending: false }],
+      };
+      const [noteRows, invoiceRows, quoteRows, projectRows, taskRows, memberRows] = await Promise.all([
+        tenant.table('client_notes').select<ClientNote>('*', related),
+        hasPermission('invoices.read') ? tenant.table('invoices').select<Invoice>('*', related) : Promise.resolve([]),
+        hasPermission('quotes.read') ? tenant.table('quotes').select<Quote>('*', related) : Promise.resolve([]),
+        hasPermission('projects.read') ? tenant.table('projects').select<Project>('*', related) : Promise.resolve([]),
+        hasPermission('tasks.read') ? tenant.table('tasks').select<Task>('*', related) : Promise.resolve([]),
+        tenant.members.listActive(),
       ]);
-      setNotes((notesRes.data as ClientNote[]) ?? []);
-      setInvoices((invRes.data as Invoice[]) ?? []);
-      setQuotes((qRes.data as Quote[]) ?? []);
-      setProjects((pRes.data as Project[]) ?? []);
-      setTasks((tRes.data as Task[]) ?? []);
+      setNotes(noteRows); setInvoices(invoiceRows); setQuotes(quoteRows);
+      setProjects(projectRows); setTasks(taskRows); setMembers(memberRows);
     }
-    load();
-  }, [client.id]);
+    void load();
+  }, [client.id, hasPermission, tenant]);
 
   async function addNote() {
     if (!hasPermission(ACTION_PERMISSIONS.clientsWrite)) return;
     if (!newNote.trim()) return;
-    const { data, error } = await supabase.from('client_notes').insert({
+    await tenant.assertTenantRecord('clients', client.id);
+    const [data] = await tenant.table('client_notes').insert({
       client_id: client.id,
-      author_id: profile?.id,
+      author_id: profile?.id ?? null,
       body: newNote,
-    }).select('*, author:profiles(*)').single();
-    if (error) { add('error', error.message); return; }
+    }, { returning: '*' });
     setNotes((prev) => [data as ClientNote, ...prev]);
     setNewNote('');
     add('success', 'Note added');
@@ -387,7 +395,8 @@ function ClientDetail({ client, onBack, onUpdated }: { client: Client; onBack: (
 
   async function deleteNote(id: string) {
     if (!hasPermission(ACTION_PERMISSIONS.clientsWrite)) return;
-    await supabase.from('client_notes').delete().eq('id', id);
+    await tenant.assertTenantRecord('clients', client.id);
+    await tenant.table('client_notes').deleteById(id);
     setNotes((prev) => prev.filter((n) => n.id !== id));
   }
 
@@ -478,10 +487,10 @@ function ClientDetail({ client, onBack, onUpdated }: { client: Client; onBack: (
             <div className="space-y-3">
               {notes.map((n) => (
                 <div key={n.id} className="flex items-start gap-3 p-3 rounded-lg bg-muted group">
-                  <Avatar name={n.author?.full_name} size="sm" />
+                  <Avatar name={members.find((member) => member.user_id === n.author_id)?.full_name} size="sm" />
                   <div className="flex-1">
                     <p className="text-sm text-primary">{n.body}</p>
-                    <p className="text-xs text-tertiary mt-1">{n.author?.full_name} · {timeAgo(n.created_at)}</p>
+                    <p className="text-xs text-tertiary mt-1">{members.find((member) => member.user_id === n.author_id)?.full_name || 'Unknown'} · {timeAgo(n.created_at)}</p>
                   </div>
                   {hasPermission(ACTION_PERMISSIONS.clientsWrite) && <button onClick={() => deleteNote(n.id)} className="text-tertiary hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Trash2 size={14} />
@@ -572,7 +581,7 @@ function ClientDetail({ client, onBack, onUpdated }: { client: Client; onBack: (
                 <div key={t.id} className="flex items-center justify-between p-4 hover:bg-muted">
                   <div>
                     <p className="text-sm font-medium text-primary">{t.title}</p>
-                    <p className="text-xs text-tertiary">Due {formatDate(t.deadline)} · {t.assigned_to_profile?.full_name || 'Unassigned'}</p>
+                    <p className="text-xs text-tertiary">Due {formatDate(t.deadline)} · {members.find((member) => member.user_id === t.assigned_to)?.full_name || 'Unassigned'}</p>
                   </div>
                   <Badge variant={t.status === 'done' ? 'success' : t.priority === 'urgent' ? 'danger' : 'neutral'}>{t.status}</Badge>
                 </div>

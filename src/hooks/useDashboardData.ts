@@ -1,5 +1,8 @@
-import { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useCallback, useState, useEffect } from 'react';
+import { useOrganization } from '@/context/OrganizationContext';
+import { useTenantData } from '@/context/TenantDataContext';
+import type { PermissionKey } from '@/lib/authorization';
+import { readTenantSource } from '@/lib/tenant-domain-workflows';
 import type { Client, Invoice, Project, Quote, Task, Activity, Meeting, Payment, Lead } from '@/types';
 import { isToday, isThisMonth, isOverdue } from '@/lib/utils';
 
@@ -18,6 +21,8 @@ export interface DashboardData {
 }
 
 export function useDashboardData(): DashboardData {
+  const tenant = useTenantData();
+  const { hasPermission, hasAllPermissions } = useOrganization();
   const [data, setData] = useState<Omit<DashboardData, 'loading' | 'refresh'>>({
     clients: [],
     invoices: [],
@@ -31,47 +36,56 @@ export function useDashboardData(): DashboardData {
   });
   const [loading, setLoading] = useState(true);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
+    setData({
+      clients: [], invoices: [], projects: [], quotes: [], tasks: [],
+      activities: [], meetings: [], payments: [], leads: [],
+    });
+    const permitted = <T,>(permission: PermissionKey, request: () => Promise<T[]>) =>
+      readTenantSource(hasPermission(permission), request);
+    const activitySourcePermissions: PermissionKey[] = [
+      'clients.read', 'leads.read', 'quotes.read', 'invoices.read',
+      'projects.read', 'tasks.read', 'documents.read', 'tickets.read',
+    ];
+    const canReadClients = hasPermission('clients.read');
+    const canReadProjects = hasPermission('projects.read');
+    const invoiceProjection = canReadClients ? '*, client:clients(*)' : '*';
+    const projectProjection = canReadClients ? '*, client:clients(*)' : '*';
+    const quoteProjection = canReadClients ? '*, client:clients(*)' : '*';
+    const taskProjection = canReadClients && canReadProjects
+      ? '*, project:projects(*), client:clients(*)'
+      : canReadClients
+        ? '*, client:clients(*)'
+        : canReadProjects
+          ? '*, project:projects(*)'
+          : '*';
+    const meetingProjection = canReadClients ? '*, client:clients(*)' : '*';
     const [
-      clientsRes,
-      invoicesRes,
-      projectsRes,
-      quotesRes,
-      tasksRes,
-      activitiesRes,
-      meetingsRes,
-      paymentsRes,
-      leadsRes,
+      clients, invoices, projects, quotes, tasks, activities, meetings, payments, leads,
     ] = await Promise.all([
-      supabase.from('clients').select('*').order('created_at', { ascending: false }),
-      supabase.from('invoices').select('*, client:clients(*)').order('created_at', { ascending: false }),
-      supabase.from('projects').select('*, client:clients(*)').order('created_at', { ascending: false }),
-      supabase.from('quotes').select('*, client:clients(*)').order('created_at', { ascending: false }),
-      supabase.from('tasks').select('*, assigned_to_profile:profiles!tasks_assigned_to_fkey(*), project:projects(*), client:clients(*)').order('created_at', { ascending: false }),
-      supabase.from('activities').select('*, user:profiles(*)').order('created_at', { ascending: false }).limit(20),
-      supabase.from('meetings').select('*, client:clients(*)').order('start_at', { ascending: true }),
-      supabase.from('payments').select('*').order('paid_at', { ascending: false }),
-      supabase.from('leads').select('*').order('created_at', { ascending: false }),
+      permitted<Client>('clients.read', () => tenant.table('clients').select<Client>('*', { order: [{ column: 'created_at', ascending: false }] })),
+      permitted<Invoice>('invoices.read', () => tenant.table('invoices').select<Invoice>(invoiceProjection, { order: [{ column: 'created_at', ascending: false }] })),
+      permitted<Project>('projects.read', () => tenant.table('projects').select<Project>(projectProjection, { order: [{ column: 'created_at', ascending: false }] })),
+      permitted<Quote>('quotes.read', () => tenant.table('quotes').select<Quote>(quoteProjection, { order: [{ column: 'created_at', ascending: false }] })),
+      permitted<Task>('tasks.read', () => tenant.table('tasks').select<Task>(taskProjection, { order: [{ column: 'created_at', ascending: false }] })),
+      hasAllPermissions(activitySourcePermissions)
+        ? tenant.table('activities').select<Activity>('*', { order: [{ column: 'created_at', ascending: false }], limit: 20 })
+        : Promise.resolve([] as Activity[]),
+      permitted<Meeting>('projects.read', () => tenant.table('meetings').select<Meeting>(meetingProjection, { order: [{ column: 'start_at', ascending: true }] })),
+      permitted<Payment>('payments.read', () => tenant.table('payments').select<Payment>('*', { order: [{ column: 'paid_at', ascending: false }] })),
+      permitted<Lead>('leads.read', () => tenant.table('leads').select<Lead>('*', { order: [{ column: 'created_at', ascending: false }] })),
     ]);
 
     setData({
-      clients: (clientsRes.data as Client[]) ?? [],
-      invoices: (invoicesRes.data as Invoice[]) ?? [],
-      projects: (projectsRes.data as Project[]) ?? [],
-      quotes: (quotesRes.data as Quote[]) ?? [],
-      tasks: (tasksRes.data as Task[]) ?? [],
-      activities: (activitiesRes.data as Activity[]) ?? [],
-      meetings: (meetingsRes.data as Meeting[]) ?? [],
-      payments: (paymentsRes.data as Payment[]) ?? [],
-      leads: (leadsRes.data as Lead[]) ?? [],
+      clients, invoices, projects, quotes, tasks, activities, meetings, payments, leads,
     });
     setLoading(false);
-  }
+  }, [hasAllPermissions, hasPermission, tenant]);
 
   useEffect(() => {
-    load();
-  }, []);
+    void load();
+  }, [load]);
 
   return { ...data, loading, refresh: load };
 }

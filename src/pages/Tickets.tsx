@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useCallback, useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useTenantData } from '@/context/TenantDataContext';
+import type { OrganizationMemberDirectoryEntry } from '@/lib/tenant-data';
 import { useToast } from '@/components/ui/Toast';
-import type { Ticket, TicketMessage, Profile, Client, TicketStatus } from '@/types';
+import type { Ticket, TicketMessage, Client, TicketStatus } from '@/types';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input, Textarea, Select } from '@/components/ui/Input';
@@ -10,8 +11,8 @@ import { Badge } from '@/components/ui/Badge';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { timeAgo, formatDate, cn, generateNumber } from '@/lib/utils';
-import { Plus, LifeBuoy, ArrowLeft, Send, Star, Clock } from 'lucide-react';
+import { timeAgo, cn, generateNumber } from '@/lib/utils';
+import { Plus, LifeBuoy, ArrowLeft, Send } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
 import { useOrganization } from '@/context/OrganizationContext';
@@ -31,45 +32,45 @@ const STATUS_CONFIG = {
 };
 
 export function TicketsPage() {
-  const { profile } = useAuth();
   const { add } = useToast();
   const { hasPermission } = useOrganization();
+  const tenant = useTenantData();
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [members, setMembers] = useState<OrganizationMemberDirectoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<'list' | 'detail'>('list');
   const [selected, setSelected] = useState<Ticket | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all');
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
-    const [tRes, cRes, uRes] = await Promise.all([
-      supabase.from('tickets').select('*, client:clients(*), assigned_to_profile:profiles!tickets_assigned_to_fkey(*)').order('created_at', { ascending: false }),
-      supabase.from('clients').select('*').order('company_name'),
-      supabase.from('profiles').select('*').order('full_name'),
+    setTickets([]); setClients([]); setMembers([]);
+    const ticketProjection = hasPermission('clients.read') ? '*, client:clients(*)' : '*';
+    const [ticketRows, clientRows, memberRows] = await Promise.all([
+      tenant.table('tickets').select<Ticket>(ticketProjection, { order: [{ column: 'created_at', ascending: false }] }),
+      hasPermission('clients.read') ? tenant.table('clients').select<Client>('*', { order: [{ column: 'company_name' }] }) : Promise.resolve([]),
+      tenant.members.listActive(),
     ]);
-    setTickets((tRes.data as Ticket[]) ?? []);
-    setClients((cRes.data as Client[]) ?? []);
-    setProfiles((uRes.data as Profile[]) ?? []);
+    setTickets(ticketRows); setClients(clientRows); setMembers(memberRows);
     setLoading(false);
-  }
+  }, [hasPermission, tenant]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const filtered = tickets.filter((t) => statusFilter === 'all' || t.status === statusFilter);
 
   async function updateStatus(ticket: Ticket, status: TicketStatus) {
     if (!hasPermission(ACTION_PERMISSIONS.ticketsWrite)) return;
-    await supabase.from('tickets').update({ status }).eq('id', ticket.id);
+    await tenant.table('tickets').updateById(ticket.id, { status });
     setTickets((prev) => prev.map((t) => (t.id === ticket.id ? { ...t, status } : t)));
     if (selected?.id === ticket.id) setSelected({ ...selected, status });
     add('success', `Ticket ${status.replace('_', ' ')}`);
   }
 
   if (view === 'detail' && selected) {
-    return <TicketDetail ticket={selected} profiles={profiles} onBack={() => { setView('list'); setSelected(null); }} onUpdated={load} onUpdateStatus={updateStatus} />;
+    return <TicketDetail ticket={selected} members={members} onBack={() => { setView('list'); setSelected(null); }} onUpdateStatus={updateStatus} />;
   }
 
   return (
@@ -121,14 +122,16 @@ export function TicketsPage() {
         </Card>
       )}
 
-      <TicketModal open={showModal && hasPermission(ACTION_PERMISSIONS.ticketsWrite)} onClose={() => setShowModal(false)} clients={clients} profiles={profiles} onSaved={() => { setShowModal(false); load(); }} />
+      <TicketModal open={showModal && hasPermission(ACTION_PERMISSIONS.ticketsWrite)} onClose={() => setShowModal(false)} clients={clients} members={members} onSaved={() => { setShowModal(false); void load(); }} />
     </div>
   );
 }
 
-function TicketModal({ open, onClose, clients, profiles, onSaved }: { open: boolean; onClose: () => void; clients: Client[]; profiles: Profile[]; onSaved: () => void }) {
+function TicketModal({ open, onClose, clients, members, onSaved }: { open: boolean; onClose: () => void; clients: Client[]; members: OrganizationMemberDirectoryEntry[]; onSaved: () => void }) {
   const { profile } = useAuth();
   const { add } = useToast();
+  const tenant = useTenantData();
+  const { hasPermission } = useOrganization();
   const [form, setForm] = useState<Partial<Ticket>>({ priority: 'medium', status: 'open' });
   const [saving, setSaving] = useState(false);
 
@@ -136,17 +139,19 @@ function TicketModal({ open, onClose, clients, profiles, onSaved }: { open: bool
     setSaving(true);
     try {
       const ticketNumber = generateNumber('TKT');
-      const { error } = await supabase.from('tickets').insert({
+      if (!hasPermission(ACTION_PERMISSIONS.ticketsWrite)) throw new Error('Ticket write permission is required');
+      if (form.client_id) await tenant.assertTenantRecord('clients', form.client_id);
+      if (form.assigned_to) await tenant.members.assertActive(form.assigned_to);
+      await tenant.table('tickets').insert({
         ticket_number: ticketNumber,
         subject: form.subject,
         client_id: form.client_id || null,
-        created_by: profile?.id,
+        created_by: profile?.id ?? null,
         assigned_to: form.assigned_to || null,
         priority: form.priority || 'medium',
         status: 'open',
         description: form.description,
       });
-      if (error) throw error;
       add('success', 'Ticket created');
       onSaved();
     } catch (err) {
@@ -169,7 +174,7 @@ function TicketModal({ open, onClose, clients, profiles, onSaved }: { open: bool
           </Select>
           <Select label="Assign To" value={form.assigned_to || ''} onChange={(e) => setForm({ ...form, assigned_to: e.target.value })}>
             <option value="">Unassigned</option>
-            {profiles.map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+            {members.map((member) => <option key={member.membership_id} value={member.user_id}>{member.full_name}</option>)}
           </Select>
           <Select label="Priority" value={form.priority || 'medium'} onChange={(e) => setForm({ ...form, priority: e.target.value as Ticket['priority'] })}>
             <option value="low">Low</option>
@@ -183,32 +188,37 @@ function TicketModal({ open, onClose, clients, profiles, onSaved }: { open: bool
   );
 }
 
-function TicketDetail({ ticket, profiles, onBack, onUpdated, onUpdateStatus }: { ticket: Ticket; profiles: Profile[]; onBack: () => void; onUpdated: () => void; onUpdateStatus: (t: Ticket, s: TicketStatus) => void }) {
+function TicketDetail({ ticket, members, onBack, onUpdateStatus }: { ticket: Ticket; members: OrganizationMemberDirectoryEntry[]; onBack: () => void; onUpdateStatus: (t: Ticket, s: TicketStatus) => void }) {
   const { profile } = useAuth();
-  const { add } = useToast();
   const { hasPermission } = useOrganization();
+  const tenant = useTenantData();
   const [messages, setMessages] = useState<TicketMessage[]>([]);
   const [newMsg, setNewMsg] = useState('');
   const [internal, setInternal] = useState(false);
 
   useEffect(() => {
     async function load() {
-      const { data } = await supabase.from('ticket_messages').select('*, author:profiles(*)').eq('ticket_id', ticket.id).order('created_at');
-      setMessages((data as TicketMessage[]) ?? []);
+      setMessages([]);
+      await tenant.assertTenantRecord('tickets', ticket.id);
+      const rows = await tenant.table('ticket_messages').select<TicketMessage>('*', {
+        filters: [{ operator: 'eq', column: 'ticket_id', value: ticket.id }],
+        order: [{ column: 'created_at' }],
+      });
+      setMessages(rows);
     }
-    load();
-  }, [ticket.id]);
+    void load();
+  }, [tenant, ticket.id]);
 
   async function sendMsg() {
     if (!hasPermission(ACTION_PERMISSIONS.ticketsWrite)) return;
     if (!newMsg.trim()) return;
-    const { data, error } = await supabase.from('ticket_messages').insert({
+    await tenant.assertTenantRecord('tickets', ticket.id);
+    const [data] = await tenant.table('ticket_messages').insert({
       ticket_id: ticket.id,
-      author_id: profile?.id,
+      author_id: profile?.id ?? null,
       body: newMsg,
       internal,
-    }).select('*, author:profiles(*)').single();
-    if (error) { add('error', error.message); return; }
+    }, { returning: '*' });
     setMessages((prev) => [...prev, data as TicketMessage]);
     setNewMsg('');
   }
@@ -254,10 +264,10 @@ function TicketDetail({ ticket, profiles, onBack, onUpdated, onUpdateStatus }: {
           <div className="space-y-4">
             {messages.map((m) => (
               <div key={m.id} className={cn('flex gap-3', m.internal && 'opacity-60')}>
-                <Avatar name={m.author?.full_name} src={m.author?.avatar_url} size="sm" />
+                <Avatar name={members.find((member) => member.user_id === m.author_id)?.full_name} src={members.find((member) => member.user_id === m.author_id)?.avatar_url} size="sm" />
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-medium text-primary">{m.author?.full_name || 'Unknown'}</p>
+                    <p className="text-sm font-medium text-primary">{members.find((member) => member.user_id === m.author_id)?.full_name || 'Unknown'}</p>
                     {m.internal && <Badge variant="warning">Internal</Badge>}
                     <span className="text-xs text-tertiary">{timeAgo(m.created_at)}</span>
                   </div>

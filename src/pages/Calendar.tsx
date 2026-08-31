@@ -1,15 +1,16 @@
-import { useState, useEffect, useMemo } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useCallback, useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useOrganization } from '@/context/OrganizationContext';
+import { useTenantData } from '@/context/TenantDataContext';
+import { ACTION_PERMISSIONS } from '@/lib/authorization';
 import { useToast } from '@/components/ui/Toast';
 import type { Meeting, Client, MeetingType } from '@/types';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input, Textarea, Select } from '@/components/ui/Input';
-import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
-import { cn, formatDate } from '@/lib/utils';
-import { Plus, ChevronLeft, ChevronRight, Calendar as CalendarIcon, MapPin, Clock } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { Plus, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const TYPE_CONFIG: Record<MeetingType, { color: string; label: string }> = {
   meeting: { color: 'bg-purple', label: 'Meeting' },
@@ -22,27 +23,27 @@ const TYPE_CONFIG: Record<MeetingType, { color: string; label: string }> = {
 };
 
 export function CalendarPage() {
-  const { profile } = useAuth();
-  const { add } = useToast();
+  const tenant = useTenantData();
+  const { hasPermission } = useOrganization();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
-  const [loading, setLoading] = useState(true);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [showModal, setShowModal] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
-  async function load() {
-    setLoading(true);
-    const [mRes, cRes] = await Promise.all([
-      supabase.from('meetings').select('*, client:clients(*)').order('start_at'),
-      supabase.from('clients').select('*').order('company_name'),
+  const load = useCallback(async () => {
+    setMeetings([]); setClients([]);
+    const meetingProjection = hasPermission('clients.read') ? '*, client:clients(*)' : '*';
+    const [meetingRows, clientRows] = await Promise.all([
+      tenant.table('meetings').select<Meeting>(meetingProjection, { order: [{ column: 'start_at' }] }),
+      hasPermission('clients.read')
+        ? tenant.table('clients').select<Client>('*', { order: [{ column: 'company_name' }] })
+        : Promise.resolve([]),
     ]);
-    setMeetings((mRes.data as Meeting[]) ?? []);
-    setClients((cRes.data as Client[]) ?? []);
-    setLoading(false);
-  }
+    setMeetings(meetingRows); setClients(clientRows);
+  }, [hasPermission, tenant]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const monthStart = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
   const monthEnd = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
@@ -70,7 +71,7 @@ export function CalendarPage() {
           <h1 className="text-2xl font-bold tracking-tight">Calendar</h1>
           <p className="text-sm text-tertiary mt-0.5">Meetings, deadlines, and events</p>
         </div>
-        <Button onClick={() => { setSelectedDate(new Date().toISOString().slice(0, 10)); setShowModal(true); }}><Plus size={16} /> New Event</Button>
+        {hasPermission(ACTION_PERMISSIONS.projectsWrite) && <Button onClick={() => { setSelectedDate(new Date().toISOString().slice(0, 10)); setShowModal(true); }}><Plus size={16} /> New Event</Button>}
       </div>
 
       <div className="flex items-center justify-between">
@@ -125,6 +126,8 @@ export function CalendarPage() {
 
 function MeetingModal({ open, onClose, clients, selectedDate, onSaved }: { open: boolean; onClose: () => void; clients: Client[]; selectedDate: string | null; onSaved: () => void }) {
   const { profile } = useAuth();
+  const tenant = useTenantData();
+  const { hasPermission } = useOrganization();
   const { add } = useToast();
   const [form, setForm] = useState<Partial<Meeting>>({ type: 'meeting', status: 'scheduled' });
   const [saving, setSaving] = useState(false);
@@ -138,18 +141,21 @@ function MeetingModal({ open, onClose, clients, selectedDate, onSaved }: { open:
   async function handleSave() {
     setSaving(true);
     try {
-      const { error } = await supabase.from('meetings').insert({
+      if (!hasPermission(ACTION_PERMISSIONS.projectsWrite)) throw new Error('Project write permission is required');
+      if (form.client_id) await tenant.assertTenantRecord('clients', form.client_id);
+      if (profile?.id) await tenant.members.assertActive(profile.id);
+      await tenant.table('meetings').insert({
         title: form.title,
         type: form.type || 'meeting',
         client_id: form.client_id || null,
-        assigned_to: profile?.id,
+        assigned_to: profile?.id ?? null,
+        project_id: null,
         location: form.location,
         start_at: form.start_at,
         end_at: form.end_at,
         notes: form.notes,
         status: 'scheduled',
       });
-      if (error) throw error;
       add('success', 'Event created');
       onSaved();
     } catch (err) {

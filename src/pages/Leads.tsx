@@ -1,16 +1,14 @@
-import { useState, useEffect, useMemo } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useCallback, useState, useEffect, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useTenantData } from '@/context/TenantDataContext';
+import { moveLeadWithActivity } from '@/lib/tenant-domain-workflows';
 import { useToast } from '@/components/ui/Toast';
-import type { Lead, LeadStage, Profile } from '@/types';
-import { Card } from '@/components/ui/Card';
+import type { Lead, LeadStage } from '@/types';
 import { Button } from '@/components/ui/Button';
 import { Input, Textarea, Select } from '@/components/ui/Input';
-import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
-import { EmptyState } from '@/components/ui/EmptyState';
 import { formatCurrency, formatDate, cn } from '@/lib/utils';
-import { Plus, Target, GripVertical, Mail, Phone, Calendar, TrendingUp } from 'lucide-react';
+import { Plus, GripVertical, Calendar } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
 import { useOrganization } from '@/context/OrganizationContext';
@@ -26,6 +24,7 @@ const STAGES: { id: LeadStage; label: string; color: string; accent: string }[] 
 
 export function LeadsPage() {
   const { profile } = useAuth();
+  const tenant = useTenantData();
   const { hasPermission } = useOrganization();
   const { add } = useToast();
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -34,14 +33,15 @@ export function LeadsPage() {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverStage, setDragOverStage] = useState<LeadStage | null>(null);
 
-  async function loadLeads() {
+  const loadLeads = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase.from('leads').select('*, assigned_to_profile:profiles!leads_assigned_to_fkey(*)').order('created_at', { ascending: false });
-    setLeads((data as Lead[]) ?? []);
+    setLeads([]);
+    const data = await tenant.table('leads').select<Lead>('*', { order: [{ column: 'created_at', ascending: false }] });
+    setLeads(data);
     setLoading(false);
-  }
+  }, [tenant]);
 
-  useEffect(() => { loadLeads(); }, []);
+  useEffect(() => { void loadLeads(); }, [loadLeads]);
 
   const leadsByStage = useMemo(() => {
     const map: Record<LeadStage, Lead[]> = { new_lead: [], contacted: [], proposal_sent: [], negotiating: [], won: [], lost: [] };
@@ -60,19 +60,19 @@ export function LeadsPage() {
     if (!draggedId) return;
     const lead = leads.find((l) => l.id === draggedId);
     if (!lead || lead.stage === stage) { setDraggedId(null); setDragOverStage(null); return; }
-    await supabase.from('leads').update({ stage }).eq('id', draggedId);
+    await moveLeadWithActivity({
+      tenant,
+      canWrite: hasPermission(ACTION_PERMISSIONS.leadsWrite),
+      leadId: draggedId,
+      companyName: lead.company_name,
+      stage,
+      userId: profile?.id ?? null,
+    });
     setLeads((prev) => prev.map((l) => (l.id === draggedId ? { ...l, stage } : l)));
     add('success', `Lead moved to ${stage.replace('_', ' ')}`);
     setDraggedId(null);
     setDragOverStage(null);
 
-    await supabase.from('activities').insert({
-      user_id: profile?.id,
-      type: 'lead_stage_change',
-      entity: 'lead',
-      entity_id: lead.id,
-      description: `moved lead "${lead.company_name}" to ${stage.replace('_', ' ')}`,
-    });
   }
 
   return (
@@ -166,6 +166,8 @@ export function LeadsPage() {
 
 function LeadModal({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
   const { profile } = useAuth();
+  const tenant = useTenantData();
+  const { hasPermission } = useOrganization();
   const { add } = useToast();
   const [form, setForm] = useState<Partial<Lead>>({ stage: 'new_lead', lead_score: 50, estimated_value: 0 });
   const [saving, setSaving] = useState(false);
@@ -173,7 +175,9 @@ function LeadModal({ open, onClose, onSaved }: { open: boolean; onClose: () => v
   async function handleSave() {
     setSaving(true);
     try {
-      const { error } = await supabase.from('leads').insert({
+      if (!hasPermission(ACTION_PERMISSIONS.leadsWrite)) throw new Error('Lead write permission is required');
+      if (profile?.id) await tenant.members.assertActive(profile.id);
+      const [lead] = await tenant.table('leads').insert({
         company_name: form.company_name,
         contact_name: form.contact_name,
         email: form.email,
@@ -184,16 +188,17 @@ function LeadModal({ open, onClose, onSaved }: { open: boolean; onClose: () => v
         estimated_value: form.estimated_value || 0,
         expected_closing_date: form.expected_closing_date,
         notes: form.notes,
-        assigned_to: profile?.id,
-      });
-      if (error) throw error;
-      add('success', 'Lead created');
-      await supabase.from('activities').insert({
-        user_id: profile?.id,
+        assigned_to: profile?.id ?? null,
+      }, { returning: 'id' });
+      await tenant.table('activities').insert({
+        user_id: profile?.id ?? null,
         type: 'lead_created',
         entity: 'lead',
+        entity_id: lead.id,
         description: `created lead "${form.company_name}"`,
+        metadata: null,
       });
+      add('success', 'Lead created');
       onSaved();
     } catch (err) {
       add('error', (err as Error).message);
