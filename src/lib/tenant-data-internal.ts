@@ -372,6 +372,10 @@ export interface TenantMemberDirectoryApi {
   assertActive(userId: string): Promise<OrganizationMemberDirectoryEntry>;
 }
 
+export interface TenantNotificationApi {
+  markRead(id: string, userId: string): Promise<TenantMutationResult>;
+}
+
 export interface TenantDataApi {
   table(table: TenantDomainTable): TenantTableApi;
   assertTenantRecord<T extends TenantOwnedRecord = TenantOwnedRecord>(
@@ -380,6 +384,7 @@ export interface TenantDataApi {
     columns?: string,
   ): Promise<T>;
   members: TenantMemberDirectoryApi;
+  notifications: TenantNotificationApi;
 }
 
 export function createTenantDataApi(
@@ -491,6 +496,26 @@ export function createTenantDataApi(
           throw new TenantDataIntegrityError('Assignee is not one active member of this organization');
         }
         return matches[0];
+      },
+    },
+    notifications: {
+      async markRead(id: string, userId: string): Promise<TenantMutationResult> {
+        assertIdentifier(id);
+        assertIdentifier(userId);
+        const token = scope.captureMutation();
+        const result = await database
+          .from('notifications')
+          .update({ read: true })
+          .eq('id', id)
+          .eq('organization_id', token.organizationId)
+          .eq('user_id', userId)
+          .select('id, organization_id, user_id');
+        const rows = rowsFromResult(await result);
+        scope.assertCurrent(token);
+        if (rows.length !== 1 || rows[0].id !== id || rows[0].organization_id !== token.organizationId || rows[0].user_id !== userId) {
+          throw new TenantDataIntegrityError('Notification mutation expected exactly one current-user tenant row');
+        }
+        return rows[0] as unknown as TenantMutationResult;
       },
     },
   };

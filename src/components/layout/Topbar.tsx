@@ -2,10 +2,11 @@ import { useState, useRef, useEffect } from 'react';
 import { Search, Bell, Menu, ChevronDown, LogOut, User as UserIcon, Settings as SettingsIcon, Check } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useOrganization } from '@/context/OrganizationContext';
+import { useTenantData } from '@/context/TenantDataContext';
+import { markTenantNotificationsRead } from '@/lib/tenant-domain-workflows';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { cn } from '@/lib/utils';
-import { supabase } from '@/lib/supabase';
 import type { Notification } from '@/types';
 import { timeAgo } from '@/lib/utils';
 import { canAccessPage, type AppPage } from '@/lib/authorization';
@@ -20,21 +21,36 @@ interface TopbarProps {
 export function Topbar({ onToggleSidebar, onNavigate, searchQuery, onSearchChange }: TopbarProps) {
   const { profile, signOut } = useAuth();
   const { currentOrganization, membership, roles, permissions } = useOrganization();
+  const tenant = useTenantData();
   const [notifOpen, setNotifOpen] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
+  const notificationScope = `${currentOrganization?.id ?? ''}:${profile?.id ?? ''}`;
+  const notificationScopeRef = useRef(notificationScope);
+  notificationScopeRef.current = notificationScope;
 
   useEffect(() => {
+    let cancelled = false;
+    setNotifications([]);
     async function load() {
       if (!profile?.id) return;
-      const { data } = await supabase.from('notifications').select('*').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(20);
-      setNotifications(data as Notification[] ?? []);
+      try {
+        const data = await tenant.table('notifications').select<Notification>('*', {
+          filters: [{ operator: 'eq', column: 'user_id', value: profile.id }],
+          order: [{ column: 'created_at', ascending: false }],
+          limit: 20,
+        });
+        if (!cancelled) setNotifications(data);
+      } catch {
+        if (!cancelled) setNotifications([]);
+      }
     }
-    load();
-  }, [profile?.id]);
+    void load();
+    return () => { cancelled = true; };
+  }, [profile?.id, tenant, currentOrganization?.id]);
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -49,8 +65,14 @@ export function Topbar({ onToggleSidebar, onNavigate, searchQuery, onSearchChang
 
   async function markAllRead() {
     if (!profile?.id) return;
-    await supabase.from('notifications').update({ read: true }).eq('user_id', profile.id).eq('read', false);
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    const requestScope = notificationScope;
+    try {
+      await markTenantNotificationsRead(tenant, profile.id, notifications);
+      if (notificationScopeRef.current !== requestScope) return;
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    } catch {
+      // Preserve the unread state when ownership or tenant verification fails.
+    }
   }
 
   return (

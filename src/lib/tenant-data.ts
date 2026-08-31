@@ -11,6 +11,7 @@ export type {
   TenantDomainTable,
   TenantFilter,
   TenantMemberDirectoryApi,
+  TenantNotificationApi,
   TenantMutationInput,
   TenantMutationResult,
   TenantOrder,
