@@ -106,3 +106,43 @@ silently.
 The Client role is rejected entirely in Batch 4D. The real owner and bootstrap
 admin are protected from cross-tenant membership and cannot be changed by this
 command; their approved existing mappings can only produce a verified no-op.
+
+## Batch 5A-R exact production-domain repair
+
+`repair:batch5a-domain-drift` is an incident-specific operational command, not
+a migration or a general cleanup tool. It recognizes only the fingerprinted
+2026-08-30 state: eight exact NULL-tenant lead-stage activities and three exact
+Demo lead stage/`updated_at` differences. Any additional, missing, or changed
+row fails closed.
+
+The incident was possible because the 90 legacy domain calls remain direct and
+unscoped, insert paths omit `organization_id`, and the legacy domain RLS is
+still permissive. Batch 5A added a tenant-aware application foundation but did
+not convert those legacy calls or introduce authoritative domain isolation;
+this is not a Batch 5A migration defect.
+
+Dry run is the default and uses `REPEATABLE READ READ ONLY`:
+
+```sh
+npm run repair:batch5a-domain-drift
+npm run repair:batch5a-domain-drift -- --dry-run
+```
+
+An approved repair requires the explicit flag:
+
+```sh
+npm run repair:batch5a-domain-drift -- --apply
+```
+
+Apply uses one `SERIALIZABLE` transaction, a transaction advisory lock, domain
+table locks, exact row predicates, and exactly-one-row checks. It snapshots the
+full `public.leads.touch_leads` catalog entry, disables only that trigger inside
+the transaction, restores it, and requires byte-for-byte-equivalent catalog
+state before commit. It then requires canonical 88/88/0/0 tenant totals, no
+independent manifest differences, all 22 tenant FKs, unchanged authority state,
+and `public.batch_3b_assert_seed_manifest()` to pass. Any failure rolls back the
+data and trigger DDL together.
+
+Normal production CRM domain interaction should remain suspended after repair
+until Batch 5B tenant-scoped reads and Batch 5C tenant-scoped writes/deletes are
+complete.
