@@ -146,7 +146,7 @@ RETURNS TABLE (
   id uuid,
   full_name text,
   phone text,
-  position text,
+  "position" text,
   avatar_url text,
   updated_at timestamptz
 )
@@ -182,7 +182,7 @@ BEGIN
   SET
     full_name = p_full_name,
     phone = p_phone,
-    position = p_position,
+    "position" = p_position,
     avatar_url = p_avatar_url
   WHERE profile.id = caller_id
     AND profile.active
@@ -196,7 +196,7 @@ BEGIN
     profile.id,
     profile.full_name,
     profile.phone,
-    profile.position,
+    profile."position",
     profile.avatar_url,
     profile.updated_at;
 
