@@ -27,17 +27,17 @@ export function SettingsPage() {
   async function saveProfile() {
     setSaving(true);
     try {
-      const { error } = await supabase.from('profiles').update({
-        full_name: form.full_name,
-        phone: form.phone,
-        position: form.position,
-        avatar_url: form.avatar_url,
-      }).eq('id', profile?.id);
+      const { error } = await supabase.rpc('update_own_profile', {
+        p_full_name: form.full_name ?? '',
+        p_phone: form.phone ?? null,
+        p_position: form.position ?? null,
+        p_avatar_url: form.avatar_url ?? null,
+      });
       if (error) throw error;
       add('success', 'Profile updated');
-      refreshProfile();
-    } catch (err) {
-      add('error', (err as Error).message);
+      await refreshProfile();
+    } catch {
+      add('error', 'Your profile could not be updated. Please retry.');
     } finally {
       setSaving(false);
     }

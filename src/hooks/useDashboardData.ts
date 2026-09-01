@@ -3,6 +3,7 @@ import { useOrganization } from '@/context/OrganizationContext';
 import { useTenantData } from '@/context/TenantDataContext';
 import type { PermissionKey } from '@/lib/authorization';
 import { readTenantSource } from '@/lib/tenant-domain-workflows';
+import { runTenantLoader } from '@/lib/tenant-loaders';
 import type { Client, Invoice, Project, Quote, Task, Activity, Meeting, Payment, Lead } from '@/types';
 import { isToday, isThisMonth, isOverdue } from '@/lib/utils';
 
@@ -84,7 +85,7 @@ export function useDashboardData(): DashboardData {
   }, [hasAllPermissions, hasPermission, tenant]);
 
   useEffect(() => {
-    void load();
+    void runTenantLoader(load);
   }, [load]);
 
   return { ...data, loading, refresh: load };

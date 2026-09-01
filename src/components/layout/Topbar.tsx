@@ -4,6 +4,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useOrganization } from '@/context/OrganizationContext';
 import { useTenantData } from '@/context/TenantDataContext';
 import { markTenantNotificationsRead } from '@/lib/tenant-domain-workflows';
+import { runTenantLoader } from '@/lib/tenant-loaders';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { cn } from '@/lib/utils';
@@ -37,18 +38,16 @@ export function Topbar({ onToggleSidebar, onNavigate, searchQuery, onSearchChang
     setNotifications([]);
     async function load() {
       if (!profile?.id) return;
-      try {
-        const data = await tenant.table('notifications').select<Notification>('*', {
-          filters: [{ operator: 'eq', column: 'user_id', value: profile.id }],
-          order: [{ column: 'created_at', ascending: false }],
-          limit: 20,
-        });
-        if (!cancelled) setNotifications(data);
-      } catch {
-        if (!cancelled) setNotifications([]);
-      }
+      const data = await tenant.table('notifications').select<Notification>('*', {
+        filters: [{ operator: 'eq', column: 'user_id', value: profile.id }],
+        order: [{ column: 'created_at', ascending: false }],
+        limit: 20,
+      });
+      if (!cancelled) setNotifications(data);
     }
-    void load();
+    void runTenantLoader(load, () => {
+      if (!cancelled) setNotifications([]);
+    });
     return () => { cancelled = true; };
   }, [profile?.id, tenant, currentOrganization?.id]);
 

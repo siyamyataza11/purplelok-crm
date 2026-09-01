@@ -20,11 +20,14 @@ const testDependencies = vi.hoisted(() => ({
       updated_at: '2026-08-28T00:00:00.000Z',
     },
     loading: false,
+    status: 'authenticated',
+    error: null as string | null,
+    generation: 1,
     signIn: vi.fn(),
-    signUp: vi.fn(),
     signOut: vi.fn(),
     resetPassword: vi.fn(),
     refreshProfile: vi.fn(),
+    revalidateAuth: vi.fn(async () => true),
   },
 }));
 
@@ -248,6 +251,7 @@ function ContextProbe() {
       <span data-testid="organization">{observedContext.currentOrganization?.id ?? 'none'}</span>
       <span data-testid="loading">{String(observedContext.isOrganizationLoading)}</span>
       <span data-testid="error">{observedContext.organizationError?.code ?? 'none'}</span>
+      <span data-testid="error-message">{observedContext.organizationError?.message ?? 'none'}</span>
       <span data-testid="permissions">{[...observedContext.permissions].sort().join(',')}</span>
     </div>
   );
@@ -268,6 +272,9 @@ beforeEach(() => {
   testDependencies.auth.user = { id: 'user-a' };
   testDependencies.auth.session = { access_token: 'test-session' };
   testDependencies.auth.loading = false;
+  testDependencies.auth.status = 'authenticated';
+  testDependencies.auth.error = null;
+  testDependencies.auth.generation = 1;
   testDependencies.auth.profile = {
     ...testDependencies.auth.profile,
     id: 'user-a',
@@ -275,6 +282,7 @@ beforeEach(() => {
     full_name: 'User A',
   };
   testDependencies.auth.signOut.mockReset();
+  testDependencies.auth.revalidateAuth.mockReset().mockResolvedValue(true);
 });
 
 describe('Batch 4 organization authorization integration', () => {
@@ -297,10 +305,17 @@ describe('Batch 4 organization authorization integration', () => {
 
   it('fails closed when the membership query fails', async () => {
     testDependencies.client = new FakeSupabase(datasetHandler(baseDataset(), (query) =>
-      query.table === 'organization_members' ? failure('membership query failed') : undefined));
+      query.table === 'organization_members'
+        ? failure('relation "organization_members" does not exist; PostgREST internal detail')
+        : undefined));
     renderProvider();
     await waitFor(() => expect(screen.getByTestId('error').textContent).toBe('authorization_error'));
     expect(screen.getByTestId('organization').textContent).toBe('none');
+    expect(screen.getByTestId('error-message').textContent).toBe(
+      'Your organization access could not be verified. Please retry.',
+    );
+    expect(document.body.textContent).not.toContain('organization_members');
+    expect(document.body.textContent).not.toContain('PostgREST internal detail');
   });
 
   it('fails closed when the organization query fails', async () => {
@@ -557,6 +572,85 @@ describe('Batch 4 organization authorization integration', () => {
     fireEvent.click(screen.getByText('Save Changes'));
     await waitFor(() => expect(client.requests.filter((query) => query.table === 'projects' && query.operation === 'update').length).toBe(1));
     expect(findMutation(client, 'update')).toEqual({ progress: 10, health: 'delayed' });
+  });
+
+  it('removes access when an active membership is suspended during revalidation', async () => {
+    let suspended = false;
+    const data = baseDataset(['clients.read']);
+    testDependencies.client = new FakeSupabase(datasetHandler(data, (query) => {
+      if (query.table === 'organization_members' && suspended) {
+        return ok([{ ...membership('user-a', 'a'), status: 'suspended' }]);
+      }
+      return undefined;
+    }));
+    renderProvider();
+    await expectReady();
+
+    suspended = true;
+    await act(async () => { await observedContext!.refreshOrganizationContext(); });
+    await waitFor(() => expect(screen.getByTestId('error').textContent).toBe('membership_suspended'));
+    expect(screen.getByTestId('organization').textContent).toBe('none');
+    expect(observedContext?.permissions.size).toBe(0);
+  });
+
+  it('removes permissions when the assigned role is removed during revalidation', async () => {
+    let roleRemoved = false;
+    const data = baseDataset(['clients.read']);
+    testDependencies.client = new FakeSupabase(datasetHandler(data, (query) => {
+      if (query.table === 'organization_member_roles' && roleRemoved) return ok([]);
+      return undefined;
+    }));
+    renderProvider();
+    await expectReady();
+
+    roleRemoved = true;
+    await act(async () => { await observedContext!.refreshOrganizationContext(); });
+    await waitFor(() => expect(screen.getByTestId('error').textContent).toBe('no_permissions'));
+    expect(observedContext?.permissions.size).toBe(0);
+  });
+
+  it('removes access when the organization is deactivated during revalidation', async () => {
+    let organizationSuspended = false;
+    const data = baseDataset(['clients.read']);
+    testDependencies.client = new FakeSupabase(datasetHandler(data, (query) => {
+      if (query.table === 'organizations' && organizationSuspended) {
+        return ok([{ ...organization('a'), status: 'suspended' }]);
+      }
+      return undefined;
+    }));
+    renderProvider();
+    await expectReady();
+
+    organizationSuspended = true;
+    await act(async () => { await observedContext!.refreshOrganizationContext(); });
+    await waitFor(() => expect(screen.getByTestId('error').textContent).toBe('organization_suspended'));
+    expect(observedContext?.permissions.size).toBe(0);
+  });
+
+  it('keeps a no-membership user denied without auto-provisioning', async () => {
+    testDependencies.auth.profile = {
+      ...testDependencies.auth.profile,
+      role: 'super_admin',
+    };
+    testDependencies.client = new FakeSupabase(datasetHandler({
+      membershipsByUser: { 'user-a': [] },
+      permissionsByOrganization: {},
+    }));
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId('error').textContent).toBe('no_organization_access'));
+    expect(screen.getByTestId('organization').textContent).toBe('none');
+    expect(testDependencies.client.requests.filter((query) => query.operation !== 'select')).toEqual([]);
+  });
+
+  it('keeps an active roleless member denied without assigning a default role', async () => {
+    const data = baseDataset(['clients.read']);
+    testDependencies.client = new FakeSupabase(datasetHandler(data, (query) =>
+      query.table === 'organization_member_roles' ? ok([]) : undefined));
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId('error').textContent).toBe('no_permissions'));
+    expect(observedContext?.roles).toEqual([]);
+    expect(observedContext?.permissions.size).toBe(0);
+    expect(testDependencies.client.requests.filter((query) => query.operation !== 'select')).toEqual([]);
   });
 });
 

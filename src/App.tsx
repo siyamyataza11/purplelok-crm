@@ -25,7 +25,13 @@ import { canAccessPage, type AppPage } from '@/lib/authorization';
 import { isOrganizationContextReady } from '@/context/organization-context-state';
 
 function AppContent() {
-  const { session, loading } = useAuth();
+  const {
+    session,
+    loading,
+    status: authStatus,
+    revalidateAuth,
+    signOut,
+  } = useAuth();
   const {
     currentOrganization,
     membership,
@@ -37,7 +43,6 @@ function AppContent() {
     setActiveOrganization,
     refreshOrganizationContext,
   } = useOrganization();
-  const { signOut } = useAuth();
   const [page, setPage] = useState<AppPage>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -55,7 +60,49 @@ function AppContent() {
     );
   }
 
-  if (!session) return <AuthScreen />;
+  if (authStatus === 'verification_error') {
+    return (
+      <AuthAccessState
+        title="Authentication verification failed"
+        message="We couldn't verify your account. Please retry or sign out."
+        onRetry={() => void revalidateAuth()}
+        onSignOut={() => void signOut()}
+      />
+    );
+  }
+
+  if (authStatus === 'account_disabled') {
+    return (
+      <AuthAccessState
+        title="Account disabled"
+        message="Your PURPLELOK profile is inactive. Contact an administrator for access."
+        onSignOut={() => void signOut()}
+      />
+    );
+  }
+
+  if (authStatus === 'password_recovery') {
+    return (
+      <AuthAccessState
+        title="Password recovery"
+        message="Password recovery is in progress. CRM access remains locked until the recovery flow is completed."
+        onSignOut={() => void signOut()}
+      />
+    );
+  }
+
+  if (authStatus === 'unauthenticated' || !session) return <AuthScreen />;
+
+  if (authStatus !== 'authenticated') {
+    return (
+      <AuthAccessState
+        title="Authentication unavailable"
+        message="Your account has not completed live identity verification."
+        onRetry={() => void revalidateAuth()}
+        onSignOut={() => void signOut()}
+      />
+    );
+  }
 
   if (isOrganizationLoading) {
     return (
@@ -185,5 +232,35 @@ export default function App() {
         </TenantDataProvider>
       </OrganizationProvider>
     </AuthProvider>
+  );
+}
+
+function AuthAccessState({
+  title,
+  message,
+  onRetry,
+  onSignOut,
+}: {
+  title: string;
+  message: string;
+  onRetry?: () => void;
+  onSignOut: () => void;
+}) {
+  return (
+    <div className="min-h-screen bg-canvas flex items-center justify-center p-6">
+      <div className="card w-full max-w-md p-6 text-center space-y-4">
+        <div className="w-10 h-10 rounded-lg bg-purple-600 flex items-center justify-center mx-auto">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+        </div>
+        <div>
+          <h1 className="text-lg font-semibold text-primary">{title}</h1>
+          <p className="text-sm text-tertiary mt-1">{message}</p>
+        </div>
+        <div className="flex justify-center gap-2">
+          {onRetry && <Button variant="outline" onClick={onRetry}>Retry</Button>}
+          <Button variant="ghost" onClick={onSignOut}>Sign out</Button>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -3,6 +3,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useOrganization } from '@/context/OrganizationContext';
 import { useTenantData } from '@/context/TenantDataContext';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { runTenantLoader } from '@/lib/tenant-loaders';
 import { useToast } from '@/components/ui/Toast';
 import type { Meeting, Client, MeetingType } from '@/types';
 import { Card } from '@/components/ui/Card';
@@ -43,7 +44,7 @@ export function CalendarPage() {
     setMeetings(meetingRows); setClients(clientRows);
   }, [hasPermission, tenant]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void runTenantLoader(load); }, [load]);
 
   const monthStart = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
   const monthEnd = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
@@ -119,7 +120,7 @@ export function CalendarPage() {
         </div>
       </Card>
 
-      <MeetingModal open={showModal} onClose={() => setShowModal(false)} clients={clients} selectedDate={selectedDate} onSaved={() => { setShowModal(false); load(); }} />
+      <MeetingModal open={showModal} onClose={() => setShowModal(false)} clients={clients} selectedDate={selectedDate} onSaved={() => { setShowModal(false); void runTenantLoader(load); }} />
     </div>
   );
 }

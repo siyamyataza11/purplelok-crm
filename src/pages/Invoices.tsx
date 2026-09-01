@@ -13,6 +13,7 @@ import { formatCurrency, formatDate, generateNumber, cn, isOverdue } from '@/lib
 import { Plus, Receipt, Trash2, ArrowLeft, DollarSign, Send, Clock, AlertCircle } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { runTenantLoader } from '@/lib/tenant-loaders';
 import { useOrganization } from '@/context/OrganizationContext';
 
 type View = 'list' | 'detail' | 'create';
@@ -42,7 +43,7 @@ export function InvoicesPage() {
     setLoading(false);
   }, [hasPermission, tenant]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void runTenantLoader(load); }, [load]);
 
   // Auto-flag overdue
   useEffect(() => {
@@ -50,12 +51,15 @@ export function InvoicesPage() {
     const overdueInvoices = invoices.filter((inv) =>
       inv.status === 'sent' && Boolean(inv.due_date && isOverdue(inv.due_date)));
     if (overdueInvoices.length === 0) return;
-    void Promise.all(overdueInvoices.map(async (inv) => {
-      if (inv.status === 'sent' && inv.due_date && isOverdue(inv.due_date)) {
-        await tenant.table('invoices').updateById(inv.id, { status: 'overdue' });
-      }
-    })).then(() => setInvoices((current) => current.map((inv) =>
-      overdueInvoices.some(({ id }) => id === inv.id) ? { ...inv, status: 'overdue' } : inv)));
+    void runTenantLoader(async () => {
+      await Promise.all(overdueInvoices.map(async (inv) => {
+        if (inv.status === 'sent' && inv.due_date && isOverdue(inv.due_date)) {
+          await tenant.table('invoices').updateById(inv.id, { status: 'overdue' });
+        }
+      }));
+      setInvoices((current) => current.map((inv) =>
+        overdueInvoices.some(({ id }) => id === inv.id) ? { ...inv, status: 'overdue' } : inv));
+    });
   }, [hasPermission, invoices, tenant]);
 
   const filtered = useMemo(() => invoices.filter((i) => statusFilter === 'all' || i.status === statusFilter), [invoices, statusFilter]);
@@ -363,7 +367,7 @@ function InvoiceDetail({ invoice, onBack, onPay, onSend }: {
       ]);
       setItems(itemRows); setPayments(paymentRows);
     }
-    void load();
+    void runTenantLoader(load);
   }, [hasPermission, invoice.id, tenant]);
 
   return (

@@ -28,6 +28,10 @@ import {
   moveLeadWithActivity,
   readTenantSource,
 } from '../../src/lib/tenant-domain-workflows.ts';
+import {
+  runTenantLoader,
+  TENANT_LOAD_ERROR_MESSAGE,
+} from '../../src/lib/tenant-loaders.ts';
 
 interface Operation {
   method: string;
@@ -124,6 +128,81 @@ function eqOperations(builder: FakeBuilder): unknown[][] {
 test('tenant wrapper rejects an unresolved organization', async () => {
   const api = createTenantDataApi(new FakeDatabase(), new TenantRequestScope(null));
   await assert.rejects(() => api.table('clients').select(), TenantContextUnavailableError);
+});
+
+test('Projects stale read cancellation is handled without an unhandled rejection', async () => {
+  const database = new FakeDatabase();
+  const pending = deferred<QueryResult>();
+  database.enqueuePromise(pending.promise);
+  const scope = new TenantRequestScope('org-a');
+  const api = createTenantDataApi(database, scope);
+  const surfaced: string[] = [];
+  const completion = runTenantLoader(
+    () => api.table('projects').select(),
+    (message) => surfaced.push(message),
+  );
+  scope.switchOrganization('org-b');
+  pending.resolve({ data: [{ id: 'project-a', organization_id: 'org-a' }], error: null });
+  await completion;
+  assert.deepEqual(surfaced, []);
+});
+
+test('dashboard parallel read cancellation is handled during rapid organization change', async () => {
+  const database = new FakeDatabase();
+  const clients = deferred<QueryResult>();
+  const projects = deferred<QueryResult>();
+  database.enqueuePromise(clients.promise);
+  database.enqueuePromise(projects.promise);
+  const scope = new TenantRequestScope('org-a');
+  const api = createTenantDataApi(database, scope);
+  const completion = runTenantLoader(async () => {
+    await Promise.all([
+      api.table('clients').select(),
+      api.table('projects').select(),
+    ]);
+  });
+  scope.switchOrganization('org-b');
+  scope.switchOrganization('org-a');
+  clients.resolve({ data: [], error: null });
+  projects.resolve({ data: [], error: null });
+  await completion;
+});
+
+test('representative child-page stale read cancellation is handled', async () => {
+  const database = new FakeDatabase();
+  const pending = deferred<QueryResult>();
+  database.enqueuePromise(pending.promise);
+  const scope = new TenantRequestScope('org-a');
+  const api = createTenantDataApi(database, scope);
+  const completion = runTenantLoader(() => api.table('client_notes').select());
+  scope.dispose();
+  pending.resolve({ data: [], error: null });
+  await completion;
+});
+
+test('logout disposal with an active domain read is handled', async () => {
+  const database = new FakeDatabase();
+  const pending = deferred<QueryResult>();
+  database.enqueuePromise(pending.promise);
+  const scope = new TenantRequestScope('org-a');
+  const api = createTenantDataApi(database, scope);
+  const completion = runTenantLoader(() => api.table('tickets').select());
+  scope.dispose();
+  pending.resolve({ data: [], error: null });
+  await completion;
+});
+
+test('unexpected tenant backend failure surfaces only a generic message', async () => {
+  const database = new FakeDatabase();
+  database.enqueue(null, { message: 'permission denied for table projects; PostgREST internal detail' });
+  const api = createTenantDataApi(database, new TenantRequestScope('org-a'));
+  const surfaced: string[] = [];
+  await runTenantLoader(
+    () => api.table('projects').select(),
+    (message) => surfaced.push(message),
+  );
+  assert.deepEqual(surfaced, [TENANT_LOAD_ERROR_MESSAGE]);
+  assert.doesNotMatch(surfaced[0], /projects|PostgREST|permission denied/i);
 });
 
 test('profiles cannot be queried through the tenant table allowlist', () => {

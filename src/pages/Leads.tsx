@@ -11,6 +11,7 @@ import { formatCurrency, formatDate, cn } from '@/lib/utils';
 import { Plus, GripVertical, Calendar } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { runTenantLoader } from '@/lib/tenant-loaders';
 import { useOrganization } from '@/context/OrganizationContext';
 
 const STAGES: { id: LeadStage; label: string; color: string; accent: string }[] = [
@@ -41,7 +42,7 @@ export function LeadsPage() {
     setLoading(false);
   }, [tenant]);
 
-  useEffect(() => { void loadLeads(); }, [loadLeads]);
+  useEffect(() => { void runTenantLoader(loadLeads); }, [loadLeads]);
 
   const leadsByStage = useMemo(() => {
     const map: Record<LeadStage, Lead[]> = { new_lead: [], contacted: [], proposal_sent: [], negotiating: [], won: [], lost: [] };
@@ -159,7 +160,7 @@ export function LeadsPage() {
         </div>
       )}
 
-      <LeadModal open={showModal && hasPermission(ACTION_PERMISSIONS.leadsWrite)} onClose={() => setShowModal(false)} onSaved={() => { setShowModal(false); loadLeads(); }} />
+      <LeadModal open={showModal && hasPermission(ACTION_PERMISSIONS.leadsWrite)} onClose={() => setShowModal(false)} onSaved={() => { setShowModal(false); void runTenantLoader(loadLeads); }} />
     </div>
   );
 }

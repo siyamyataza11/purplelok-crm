@@ -12,6 +12,7 @@ import { formatCurrency, formatDate, generateNumber, cn } from '@/lib/utils';
 import { Plus, FileText, Trash2, ArrowLeft, Receipt, Briefcase, Copy, Send, Check } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { runTenantLoader } from '@/lib/tenant-loaders';
 import { useOrganization } from '@/context/OrganizationContext';
 
 type View = 'list' | 'detail' | 'create';
@@ -39,7 +40,7 @@ export function QuotesPage() {
     setLoading(false);
   }, [hasPermission, tenant]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void runTenantLoader(load); }, [load]);
 
   const filtered = useMemo(() => {
     return quotes.filter((q) => statusFilter === 'all' || q.status === statusFilter);
@@ -352,7 +353,7 @@ function QuoteDetail({ quote, onBack, onConvertInvoice, onConvertProject, onDupl
       const rows = await tenant.table('quote_items').select<QuoteItem>('*', { filters: [{ operator: 'eq', column: 'quote_id', value: quote.id }], order: [{ column: 'created_at' }] });
       setItems(rows);
     }
-    void loadItems();
+    void runTenantLoader(loadItems);
   }, [quote.id, tenant]);
 
   return (

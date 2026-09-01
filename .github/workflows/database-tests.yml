@@ -10,18 +10,30 @@ permissions:
   contents: read
 
 concurrency:
-  group: batch-5a-database-validation-${{ github.ref }}
+  group: batch-5e-b2r-database-validation-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   database-tests:
-    name: Batch 5A isolated validation
+    name: Batch 5E-B2R isolated validation
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Verify checked-out implementation SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git rev-parse HEAD)"
+          echo "GitHub event SHA: ${GITHUB_SHA}"
+          echo "Checked-out SHA: ${checked_out_sha}"
+          if [[ "${checked_out_sha}" != "${GITHUB_SHA}" ]]; then
+            echo "Refusing to validate a checkout that does not match the triggering SHA."
+            exit 1
+          fi
 
       - name: Set up Node 22
         uses: actions/setup-node@v4
@@ -75,11 +87,12 @@ jobs:
             20260828150000_batch_3b_tenant_ownership_foundation.sql
             20260828170000_batch_4_active_organization_context.sql
             20260829100000_batch_5a_tenant_data_foundation.sql
+            20260831120000_batch_5e_b2r_profile_authority.sql
           )
 
           mapfile -t actual < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort)
           if [[ "${actual[*]}" != "${expected[*]}" ]]; then
-            echo "Migration inventory differs from the approved six-file Batch 5A sequence."
+            echo "Migration inventory differs from the approved seven-file Batch 5E-B2R sequence."
             printf 'Expected: %s\n' "${expected[@]}"
             printf 'Actual: %s\n' "${actual[@]}"
             exit 1
@@ -177,22 +190,26 @@ jobs:
       - name: Test Batch 5A
         run: supabase test db --local supabase/tests/database/batch_5a_tenant_data_foundation.test.sql
 
+      - name: Apply and test Batch 5E-B2R profile authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ steps.migrations.outputs.store }}/20260831120000_batch_5e_b2r_profile_authority.sql" supabase/migrations/
+          supabase migration up --local
+          supabase test db --local supabase/tests/database/batch_5e_b2r_profile_authority.test.sql
+
       - name: Validate frontend and scripts under Node 22
         shell: bash
         run: |
           set -euo pipefail
           npm run test:frontend
           npm run typecheck
-          node node_modules/eslint/bin/eslint.js \
-            src/lib/tenant-data.ts \
-            src/lib/tenant-data-internal.ts \
-            src/lib/tenant-data.type-test.ts \
-            src/context/TenantDataContext.tsx \
-            scripts/check-domain-query-baseline.ts \
-            tests/frontend/batch5-tenant-data.test.ts \
-            src/App.tsx \
-            src/types/index.ts \
-            eslint.config.js
+          mapfile -t changed_typescript < <(
+            git diff --name-only --diff-filter=ACMR HEAD^ HEAD -- '*.ts' '*.tsx'
+          )
+          if [[ ${#changed_typescript[@]} -gt 0 ]]; then
+            node node_modules/eslint/bin/eslint.js "${changed_typescript[@]}"
+          fi
           npm run check:tenant-queries
           npm run build
 

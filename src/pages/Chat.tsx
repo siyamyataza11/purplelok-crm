@@ -4,6 +4,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useOrganization } from '@/context/OrganizationContext';
 import { useTenantData } from '@/context/TenantDataContext';
 import { isTenantRealtimeMessage } from '@/lib/tenant-domain-workflows';
+import { runTenantLoader } from '@/lib/tenant-loaders';
 import { useToast } from '@/components/ui/Toast';
 import type { Channel, ChatMessage } from '@/types';
 import { Button } from '@/components/ui/Button';
@@ -125,11 +126,11 @@ export function ChatPage() {
       return;
     }
     const channelId = activeChannel.id;
-    void loadMessages(channelId).catch(() => undefined);
+    void runTenantLoader(() => loadMessages(channelId));
   }, [activeChannel, loadMessages]);
 
   useEffect(() => {
-    void loadChannels().catch(() => undefined);
+    void runTenantLoader(loadChannels);
   }, [loadChannels]);
 
   useEffect(() => {
@@ -145,7 +146,7 @@ export function ChatPage() {
       }, (payload) => {
         const channelId = activeChannelRef.current;
         if (disposed || !channelId || !isTenantRealtimeMessage(payload, organizationId, channelId)) return;
-        void loadMessages(channelId).catch(() => undefined);
+        void runTenantLoader(() => loadMessages(channelId));
       })
       .subscribe();
     return () => {

@@ -13,6 +13,7 @@ import { formatDate } from '@/lib/utils';
 import { Plus, FolderOpen, File, FileText, Image, Video, Search, Download } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { runTenantLoader } from '@/lib/tenant-loaders';
 import { useOrganization } from '@/context/OrganizationContext';
 
 const TYPE_ICONS: Record<string, React.ReactNode> = {
@@ -51,7 +52,7 @@ export function DocumentsPage() {
     setLoading(false);
   }, [hasPermission, tenant]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void runTenantLoader(load); }, [load]);
 
   const filtered = useMemo(() => documents.filter((d) => {
     const matchesSearch = !search || d.name.toLowerCase().includes(search.toLowerCase());
@@ -115,7 +116,7 @@ export function DocumentsPage() {
         </div>
       )}
 
-      <DocumentModal open={showModal && hasPermission(ACTION_PERMISSIONS.documentsWrite)} onClose={() => setShowModal(false)} clients={clients} onSaved={() => { setShowModal(false); load(); }} />
+      <DocumentModal open={showModal && hasPermission(ACTION_PERMISSIONS.documentsWrite)} onClose={() => setShowModal(false)} clients={clients} onSaved={() => { setShowModal(false); void runTenantLoader(load); }} />
     </div>
   );
 }

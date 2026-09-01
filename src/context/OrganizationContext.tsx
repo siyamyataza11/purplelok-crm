@@ -72,13 +72,23 @@ function clearPreference(userId: string) {
   }
 }
 
-function authorizationError(message = 'Unable to verify organization access. Please retry.'):
-OrganizationError {
-  return { code: 'authorization_error', message };
+function authorizationError(): OrganizationError {
+  return {
+    code: 'authorization_error',
+    message: 'Your organization access could not be verified. Please retry.',
+  };
 }
 
 export function OrganizationProvider({ children }: { children: ReactNode }) {
-  const { user, session, loading: isAuthLoading } = useAuth();
+  const {
+    user,
+    session,
+    profile,
+    loading: isAuthLoading,
+    status: authStatus,
+    generation: authGeneration,
+    revalidateAuth,
+  } = useAuth();
   const [resolved, setResolved] = useState<ResolvedOrganizationState>(
     EMPTY_RESOLVED_ORGANIZATION,
   );
@@ -100,7 +110,7 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
   const loadOrganizationContext = useCallback(async (
     requestedOrganizationId?: string,
   ) => {
-    if (!user || !session) {
+    if (authStatus !== 'authenticated' || !profile?.active || !user || !session) {
       abortController.current?.abort();
       generation.current.invalidate();
       setAvailableOrganizations([]);
@@ -266,33 +276,71 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
       writePreference(user.id, selected.organization.id);
       setOrganizationError(null);
       setIsOrganizationLoading(false);
-    } catch (error) {
+    } catch {
       if (!isCurrent()) return;
       clearResolved();
-      setOrganizationError(authorizationError(
-        error instanceof Error ? error.message : undefined,
-      ));
+      setOrganizationError(authorizationError());
       setIsOrganizationLoading(false);
     }
-  }, [clearResolved, session, user]);
+  }, [authStatus, clearResolved, profile?.active, session, user]);
 
   useEffect(() => {
     if (isAuthLoading) {
+      abortController.current?.abort();
+      generation.current.invalidate();
+      setAvailableOrganizations([]);
+      clearResolved();
+      setOrganizationError(null);
       setIsOrganizationLoading(true);
+      return;
+    }
+
+    if (authStatus !== 'authenticated' || !profile?.active || !user || !session) {
+      abortController.current?.abort();
+      generation.current.invalidate();
+      setAvailableOrganizations([]);
+      clearResolved();
+      setOrganizationError(null);
+      setIsOrganizationLoading(false);
       return;
     }
 
     void loadOrganizationContext();
     return () => abortController.current?.abort();
-  }, [isAuthLoading, loadOrganizationContext]);
+  }, [
+    authGeneration,
+    authStatus,
+    clearResolved,
+    isAuthLoading,
+    loadOrganizationContext,
+    profile?.active,
+    session,
+    user,
+  ]);
+
+  const refreshOrganizationContext = useCallback(async () => {
+    abortController.current?.abort();
+    generation.current.invalidate();
+    setAvailableOrganizations([]);
+    clearResolved();
+    setOrganizationError(null);
+    setIsOrganizationLoading(true);
+    const verified = await revalidateAuth();
+    if (!verified) {
+      setIsOrganizationLoading(false);
+      return;
+    }
+    await loadOrganizationContext();
+  }, [clearResolved, loadOrganizationContext, revalidateAuth]);
 
   const setActiveOrganization = useCallback(async (organizationId: string) => {
     if (!availableOrganizations.some(
       ({ organization }) => organization.id === organizationId,
     )) {
-      setOrganizationError(authorizationError(
-        'That organization is not available to your account.',
-      ));
+      setOrganizationError({
+        code: 'authorization_error',
+        message: 'That organization is not available to your account.',
+      });
       return;
     }
     await loadOrganizationContext(organizationId);
@@ -304,15 +352,15 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
     isOrganizationLoading,
     organizationError,
     setActiveOrganization,
-    refreshOrganizationContext: loadOrganizationContext,
+    refreshOrganizationContext,
     hasPermission: (permission) => hasOne(resolved.permissions, permission),
     hasAnyPermission: (permissions) => hasAny(resolved.permissions, permissions),
     hasAllPermissions: (permissions) => hasAll(resolved.permissions, permissions),
   }), [
     availableOrganizations,
     isOrganizationLoading,
-    loadOrganizationContext,
     organizationError,
+    refreshOrganizationContext,
     resolved,
     setActiveOrganization,
   ]);

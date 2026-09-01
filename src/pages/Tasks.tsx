@@ -13,6 +13,7 @@ import { formatDate, cn, isToday, isOverdue } from '@/lib/utils';
 import { Plus, Check, Clock } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { runTenantLoader } from '@/lib/tenant-loaders';
 import { useOrganization } from '@/context/OrganizationContext';
 
 const STATUS_COLS: { id: TaskStatus; label: string; color: string }[] = [
@@ -64,7 +65,7 @@ export function TasksPage() {
     setLoading(false);
   }, [hasPermission, tenant]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void runTenantLoader(load); }, [load]);
 
   const filtered = useMemo(() => {
     return tasks.filter((t) => {
@@ -166,7 +167,7 @@ export function TasksPage() {
         </div>
       )}
 
-      <TaskModal open={showModal && hasPermission(ACTION_PERMISSIONS.tasksWrite)} onClose={() => setShowModal(false)} members={members} clients={clients} projects={projects} onSaved={() => { setShowModal(false); void load(); }} />
+      <TaskModal open={showModal && hasPermission(ACTION_PERMISSIONS.tasksWrite)} onClose={() => setShowModal(false)} members={members} clients={clients} projects={projects} onSaved={() => { setShowModal(false); void runTenantLoader(load); }} />
     </div>
   );
 }

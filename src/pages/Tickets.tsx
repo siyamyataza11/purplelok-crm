@@ -15,6 +15,7 @@ import { timeAgo, cn, generateNumber } from '@/lib/utils';
 import { Plus, LifeBuoy, ArrowLeft, Send } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { runTenantLoader } from '@/lib/tenant-loaders';
 import { useOrganization } from '@/context/OrganizationContext';
 
 const PRIORITY_CONFIG = {
@@ -57,7 +58,7 @@ export function TicketsPage() {
     setLoading(false);
   }, [hasPermission, tenant]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void runTenantLoader(load); }, [load]);
 
   const filtered = tickets.filter((t) => statusFilter === 'all' || t.status === statusFilter);
 
@@ -122,7 +123,7 @@ export function TicketsPage() {
         </Card>
       )}
 
-      <TicketModal open={showModal && hasPermission(ACTION_PERMISSIONS.ticketsWrite)} onClose={() => setShowModal(false)} clients={clients} members={members} onSaved={() => { setShowModal(false); void load(); }} />
+      <TicketModal open={showModal && hasPermission(ACTION_PERMISSIONS.ticketsWrite)} onClose={() => setShowModal(false)} clients={clients} members={members} onSaved={() => { setShowModal(false); void runTenantLoader(load); }} />
     </div>
   );
 }
@@ -206,7 +207,7 @@ function TicketDetail({ ticket, members, onBack, onUpdateStatus }: { ticket: Tic
       });
       setMessages(rows);
     }
-    void load();
+    void runTenantLoader(load);
   }, [tenant, ticket.id]);
 
   async function sendMsg() {

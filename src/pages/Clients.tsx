@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { runTenantLoader } from '@/lib/tenant-loaders';
 import { useOrganization } from '@/context/OrganizationContext';
 
 type View = 'list' | 'detail';
@@ -59,7 +60,7 @@ export function ClientsPage({ initialQuery = '' }: { initialQuery?: string }) {
   }, [tenant]);
 
   useEffect(() => {
-    void loadClients();
+    void runTenantLoader(loadClients);
   }, [loadClients]);
 
   const filtered = useMemo(() => {
@@ -376,7 +377,7 @@ function ClientDetail({ client, onBack }: { client: Client; onBack: () => void }
       setNotes(noteRows); setInvoices(invoiceRows); setQuotes(quoteRows);
       setProjects(projectRows); setTasks(taskRows); setMembers(memberRows);
     }
-    void load();
+    void runTenantLoader(load);
   }, [client.id, hasPermission, tenant]);
 
   async function addNote() {

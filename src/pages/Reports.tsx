@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useOrganization } from '@/context/OrganizationContext';
 import { useTenantData } from '@/context/TenantDataContext';
 import { readTenantSource } from '@/lib/tenant-domain-workflows';
+import { runTenantLoader } from '@/lib/tenant-loaders';
 import type { Invoice, Payment, Project, Client, Lead, Task } from '@/types';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { formatCurrency, isThisMonth } from '@/lib/utils';
@@ -36,7 +37,7 @@ export function ReportsPage() {
       setClients(c); setLeads(l); setTasks(t);
       setLoading(false);
     }
-    void load();
+    void runTenantLoader(load);
   }, [hasPermission, tenant]);
 
   const metrics = useMemo(() => {

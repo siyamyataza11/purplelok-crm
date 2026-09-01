@@ -15,6 +15,7 @@ import { formatCurrency, formatDate, cn, isOverdue } from '@/lib/utils';
 import { Plus, ArrowLeft, GripVertical, Calendar, DollarSign, CheckCircle2, Activity, Target } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
+import { runTenantLoader } from '@/lib/tenant-loaders';
 import { useOrganization } from '@/context/OrganizationContext';
 
 type View = 'board' | 'detail';
@@ -71,7 +72,7 @@ export function ProjectsPage() {
     setLoading(false);
   }, [hasPermission, tenant]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void runTenantLoader(load); }, [load]);
 
   const filtered = useMemo(() => projects.filter((p) => typeFilter === 'all' || p.type === typeFilter), [projects, typeFilter]);
 
@@ -183,7 +184,7 @@ export function ProjectsPage() {
         </div>
       )}
 
-      <ProjectModal open={showModal && hasPermission(ACTION_PERMISSIONS.projectsWrite)} onClose={() => setShowModal(false)} clients={clients} members={members} onSaved={() => { setShowModal(false); void load(); }} />
+      <ProjectModal open={showModal && hasPermission(ACTION_PERMISSIONS.projectsWrite)} onClose={() => setShowModal(false)} clients={clients} members={members} onSaved={() => { setShowModal(false); void runTenantLoader(load); }} />
     </div>
   );
 }
@@ -282,7 +283,7 @@ function ProjectDetail({ project, members, onBack, onUpdated }: { project: Proje
       const rows = await tenant.table('project_milestones').select<ProjectMilestone>('*', { filters: [{ operator: 'eq', column: 'project_id', value: project.id }], order: [{ column: 'created_at' }] });
       setMilestones(rows);
     }
-    void load();
+    void runTenantLoader(load);
   }, [project.id, tenant]);
 
   async function addMilestone() {
