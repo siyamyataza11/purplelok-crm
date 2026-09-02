@@ -395,7 +395,9 @@ SELECT throws_ok(
   'unsupported gate type is rejected'
 );
 
-SET LOCAL ROLE supabase_auth_admin;
+-- Exercise deterministic function semantics as the postgres test connection.
+-- Catalogue assertions above prove the production ACL; the genuine Auth
+-- lifecycle job separately proves invocation by supabase_auth_admin.
 
 SELECT is(
   private.purplelok_custom_access_token_hook(
@@ -473,8 +475,6 @@ SELECT is(
   'recovery_pending_v1',
   'recovery refresh preserves recovery_pending_v1'
 );
-
-RESET ROLE;
 
 SELECT ok(
   (SELECT observed_refresh FROM private.auth_session_gates
