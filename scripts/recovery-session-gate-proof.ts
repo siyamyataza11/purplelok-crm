@@ -163,10 +163,8 @@ async function expectMalformedHookRejected(
   description: string,
 ): Promise<void> {
   await database.query('begin');
-  let operation = 'SET LOCAL ROLE supabase_auth_admin';
+  const operation = `direct postgres hook invocation: ${description}`;
   try {
-    await database.query('set local role supabase_auth_admin');
-    operation = `hook invocation: ${description}`;
     await database.query(
       'select private.batch_5f_b1_custom_access_token_hook($1::jsonb)',
       [JSON.stringify(event)],
@@ -180,10 +178,9 @@ async function expectMalformedHookRejected(
   }
 }
 
-async function assertHookAclPreconditions(database: pg.Client): Promise<{
-  current_user: string;
-  session_user: string;
-}> {
+async function assertHookAclPreconditions(
+  database: pg.Client,
+): Promise<Record<string, boolean>> {
   const result = await database.query<Record<string, boolean>>(`select
     has_schema_privilege(
       'supabase_auth_admin', 'private', 'USAGE'
@@ -214,24 +211,7 @@ async function assertHookAclPreconditions(database: pg.Client): Promise<{
     .filter(([, granted]) => !granted)
     .map(([privilege]) => privilege);
   assert.deepEqual(missing, [], `Missing hook privileges: ${missing.join(', ')}`);
-
-  await database.query('begin');
-  try {
-    await database.query('set local role supabase_auth_admin');
-    const roleResult = await database.query<{
-      current_user: string;
-      session_user: string;
-    }>('select current_user::text, session_user::text');
-    const roles = roleResult.rows[0];
-    assert(roles, 'SET ROLE probe returned no row');
-    assert.equal(roles.current_user, 'supabase_auth_admin');
-    return roles;
-  } catch (error) {
-    const code = objectValue(error)?.code;
-    throw new Error(`SET LOCAL ROLE supabase_auth_admin returned SQLSTATE ${String(code)}`);
-  } finally {
-    await database.query('rollback');
-  }
+  return privileges;
 }
 
 async function fetchJson(url: string): Promise<unknown> {
@@ -405,7 +385,7 @@ async function main(): Promise<void> {
   try {
     const sql = await readFile(PROBE_SQL, 'utf8');
     await database.query(sql);
-    const setRoleProbe = await assertHookAclPreconditions(database);
+    const hookAclPreconditions = await assertHookAclPreconditions(database);
     await expectMalformedHookRejected(database, {}, 'Missing claims object');
     await expectMalformedHookRejected(database, {
       user_id: '00000000-0000-0000-0000-000000000001',
@@ -630,14 +610,33 @@ async function main(): Promise<void> {
 
     const functionAcl = await database.query<{
       auth_admin: boolean;
+      public_execute: boolean;
       anon: boolean;
       authenticated: boolean;
       service_role: boolean;
     }>(`select
       has_function_privilege('supabase_auth_admin', 'private.batch_5f_b1_custom_access_token_hook(jsonb)', 'EXECUTE') auth_admin,
+      exists (
+        select 1
+        from pg_catalog.pg_proc as procedure
+        cross join lateral pg_catalog.aclexplode(
+          coalesce(
+            procedure.proacl,
+            pg_catalog.acldefault('f', procedure.proowner)
+          )
+        ) as privilege
+        where procedure.oid = 'private.batch_5f_b1_custom_access_token_hook(jsonb)'::regprocedure
+          and privilege.grantee = 0
+          and privilege.privilege_type = 'EXECUTE'
+      ) public_execute,
       has_function_privilege('anon', 'private.batch_5f_b1_custom_access_token_hook(jsonb)', 'EXECUTE') anon,
       has_function_privilege('authenticated', 'private.batch_5f_b1_custom_access_token_hook(jsonb)', 'EXECUTE') authenticated,
       has_function_privilege('service_role', 'private.batch_5f_b1_custom_access_token_hook(jsonb)', 'EXECUTE') service_role`);
+    assert.equal(functionAcl.rows[0]?.auth_admin, true);
+    assert.equal(functionAcl.rows[0]?.public_execute, false);
+    assert.equal(functionAcl.rows[0]?.anon, false);
+    assert.equal(functionAcl.rows[0]?.authenticated, false);
+    assert.equal(functionAcl.rows[0]?.service_role, false);
 
     console.log(JSON.stringify({
       environment: 'disposable local Supabase CI only',
@@ -649,7 +648,7 @@ async function main(): Promise<void> {
         security_mode: 'INVOKER',
         search_path: '',
         execute: functionAcl.rows[0],
-        direct_test_role: setRoleProbe,
+        catalogue_preconditions: hookAclPreconditions,
         genuine_execution_roles: [...new Set(
           (await hookEvents(database, disposableUserId)).map((event) =>
             `${event.execution_current_user}/${event.execution_session_user}`,

@@ -8,11 +8,6 @@ CREATE SCHEMA IF NOT EXISTS private AUTHORIZATION postgres;
 REVOKE ALL ON SCHEMA private FROM PUBLIC, anon, authenticated, service_role;
 GRANT USAGE ON SCHEMA private TO supabase_auth_admin;
 
--- The disposable proof connects as postgres and must be able to impersonate
--- the real hook caller for direct malformed-payload tests. This role
--- membership exists only for the lifetime of the disposable CI database.
-GRANT supabase_auth_admin TO postgres;
-
 CREATE TABLE private.auth_hook_probe_control (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
   force_recovery_failure boolean NOT NULL DEFAULT false
