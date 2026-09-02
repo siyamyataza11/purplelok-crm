@@ -410,7 +410,7 @@ SELECT is(
         'purplelok_session_state', 'forged'
       )
     )
-    #>> '{claims,purplelok_session_state}',
+    ) #>> '{claims,purplelok_session_state}',
   'normal_v1',
   'normal password session receives normal_v1 and forged input state is overwritten'
 );
@@ -425,7 +425,7 @@ SELECT is(
         'session_id', '00000000-0000-0000-0000-00000005f112'
       )
     )
-    #>> '{claims,purplelok_session_state}',
+    ) #>> '{claims,purplelok_session_state}',
   'recovery_pending_v1',
   'recovery session creates a gate and receives recovery_pending_v1'
 );
@@ -449,7 +449,7 @@ SELECT is(
         'session_id', '00000000-0000-0000-0000-00000005f112'
       )
     )
-    #>> '{claims,purplelok_session_state}',
+    ) #>> '{claims,purplelok_session_state}',
   'recovery_pending_v1',
   'exact recovery repeat is idempotent'
 );
@@ -471,7 +471,7 @@ SELECT is(
         'session_id', '00000000-0000-0000-0000-00000005f112'
       )
     )
-    #>> '{claims,purplelok_session_state}',
+    ) #>> '{claims,purplelok_session_state}',
   'recovery_pending_v1',
   'recovery refresh preserves recovery_pending_v1'
 );
