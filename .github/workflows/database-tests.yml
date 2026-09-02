@@ -216,3 +216,111 @@ jobs:
       - name: Stop disposable database
         if: always()
         run: supabase stop --no-backup
+
+  recovery-session-gate-proof:
+    name: Batch 5F-B1 disposable Auth proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout exact requested SHA
+        uses: actions/checkout@v4
+
+      - name: Verify isolated checkout and production guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "${GITHUB_SHA}" ]]
+          [[ "$(sed -n 's/^project_id = "\([^\"]*\)"/\1/p' supabase/config.toml)" == "purplelok-crm" ]]
+          if [[ -f supabase/.temp/project-ref ]]; then
+            echo "Refusing to run from a linked Supabase checkout."
+            exit 1
+          fi
+          for variable in \
+            SUPABASE_ACCESS_TOKEN \
+            SUPABASE_DB_URL \
+            SUPABASE_DB_PASSWORD \
+            SUPABASE_PROJECT_REF \
+            SUPABASE_SERVICE_ROLE_KEY \
+            SUPABASE_URL; do
+            if [[ -n "${!variable:-}" ]]; then
+              echo "Refusing to run while ${variable} is configured."
+              exit 1
+            fi
+          done
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install repository dependencies
+        run: npm ci
+
+      - name: Set up Supabase CLI 2.116.0
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.116.0
+
+      - name: Enable disposable custom access token hook
+        shell: bash
+        run: |
+          set -euo pipefail
+          perl -0pi -e 's/# \[auth\.hook\.custom_access_token\]\n# enabled = true\n# uri = "pg-functions:\/\/<database>\/<schema>\/<hook_name>"/[auth.hook.custom_access_token]\nenabled = true\nuri = "pg-functions:\/\/postgres\/private\/batch_5f_b1_custom_access_token_hook"/' supabase/config.toml
+          grep -Fq '[auth.hook.custom_access_token]' supabase/config.toml
+          grep -Fq 'uri = "pg-functions://postgres/private/batch_5f_b1_custom_access_token_hook"' supabase/config.toml
+
+      - name: Isolate production migrations from the disposable Auth proof
+        id: isolate-migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          migration_store="${RUNNER_TEMP}/batch-5f-b1-production-migrations"
+          mkdir -p "${migration_store}"
+          shopt -s nullglob
+          migrations=(supabase/migrations/*.sql)
+          [[ "${#migrations[@]}" -gt 0 ]]
+          mv "${migrations[@]}" "${migration_store}/"
+          [[ -z "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -print -quit)" ]]
+          echo "migration_store=${migration_store}" >> "${GITHUB_OUTPUT}"
+
+      - name: Start complete disposable Supabase stack
+        run: supabase start
+
+      - name: Run genuine Auth recovery lifecycle proof
+        shell: bash
+        env:
+          EXPECTED_AUTH_VERSION: v2.196.0
+          EXPECTED_POSTGRES_VERSION_PREFIX: "17.6"
+          EXPECTED_SUPABASE_JS_VERSION: 2.57.4
+          EXPECTED_AUTH_JS_VERSION: 2.71.1
+        run: |
+          set -euo pipefail
+          set -a
+          source <(supabase status -o env)
+          set +a
+          node --import tsx scripts/recovery-session-gate-proof.ts
+
+      - name: Restore production migrations
+        if: always() && steps.isolate-migrations.outcome == 'success'
+        shell: bash
+        env:
+          MIGRATION_STORE: ${{ steps.isolate-migrations.outputs.migration_store }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          migrations=("${MIGRATION_STORE}"/*.sql)
+          [[ "${#migrations[@]}" -gt 0 ]]
+          mv "${migrations[@]}" supabase/migrations/
+
+      - name: Prove production migrations were not changed
+        if: always() && steps.isolate-migrations.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- supabase/migrations
+
+      - name: Stop and destroy disposable Supabase stack
+        if: always()
+        run: supabase stop --no-backup
