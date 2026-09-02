@@ -3,6 +3,12 @@
  *
  * This script refuses non-local URLs and never prints credentials, tokens,
  * passwords, OTPs, recovery links, or email bodies.
+ *
+ * GoTrue v2.196.0 implicit recovery verification issues the session with OTP
+ * token semantics. That flow produces normal_v1 and cannot safely establish a
+ * recovery gate: treating every OTP token as recovery would also quarantine
+ * legitimate magic-link and email-OTP sessions. The authoritative feasibility
+ * path below therefore uses the SDK's genuine PKCE recovery exchange.
  */
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
@@ -49,6 +55,14 @@ interface UserAuthStateCounts {
   gates: number;
 }
 
+interface RecoveryRedirectResult {
+  status: number;
+  kind: 'implicit' | 'pkce' | 'invalid';
+  accessToken: string | null;
+  refreshToken: string | null;
+  code: string | null;
+}
+
 function requiredEnvironment(...names: string[]): string {
   for (const name of names) {
     const value = process.env[name]?.trim();
@@ -87,6 +101,27 @@ function makeClient(url: string, anonKey: string): SupabaseClient {
       autoRefreshToken: false,
       persistSession: false,
       detectSessionInUrl: false,
+    },
+  });
+}
+
+function makePkceClient(url: string, anonKey: string): SupabaseClient {
+  const values = new Map<string, string>();
+  return createClient(url, anonKey, {
+    auth: {
+      flowType: 'pkce',
+      autoRefreshToken: false,
+      persistSession: true,
+      detectSessionInUrl: false,
+      storage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          values.set(key, value);
+        },
+        removeItem: (key: string) => {
+          values.delete(key);
+        },
+      },
     },
   });
 }
@@ -308,20 +343,29 @@ async function requestRecovery(
   throw new Error(`Disposable recovery request failed: ${requestError?.name ?? 'unknown'}`);
 }
 
-async function consumeRecoveryLink(link: string): Promise<{
-  status: number;
-  accessToken: string | null;
-  refreshToken: string | null;
-}> {
+async function consumeRecoveryLink(link: string): Promise<RecoveryRedirectResult> {
   const response = await fetch(link, { redirect: 'manual' });
   const location = response.headers.get('location');
-  if (!location) return { status: response.status, accessToken: null, refreshToken: null };
+  if (!location) {
+    return {
+      status: response.status,
+      kind: 'invalid',
+      accessToken: null,
+      refreshToken: null,
+      code: null,
+    };
+  }
   const callback = new URL(location, RECOVERY_REDIRECT);
-  const parameters = new URLSearchParams(callback.hash.replace(/^#/, ''));
+  const hashParameters = new URLSearchParams(callback.hash.replace(/^#/, ''));
+  const accessToken = hashParameters.get('access_token');
+  const refreshToken = hashParameters.get('refresh_token');
+  const code = callback.searchParams.get('code');
   return {
     status: response.status,
-    accessToken: parameters.get('access_token'),
-    refreshToken: parameters.get('refresh_token'),
+    kind: code ? 'pkce' : accessToken && refreshToken ? 'implicit' : 'invalid',
+    accessToken,
+    refreshToken,
+    code,
   };
 }
 
@@ -374,7 +418,8 @@ async function main(): Promise<void> {
     auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
   });
   const normalClient = makeClient(apiUrl, anonKey);
-  const recoveryClient = makeClient(apiUrl, anonKey);
+  const implicitRecoveryClient = makeClient(apiUrl, anonKey);
+  const pkceRecoveryClient = makePkceClient(apiUrl, anonKey);
   const email = `batch5f-${Date.now()}-${randomBytes(4).toString('hex')}@example.test`;
   const oldPassword = `Old-${randomBytes(18).toString('base64url')}!7a`;
   const newPassword = `New-${randomBytes(18).toString('base64url')}!9B`;
@@ -469,27 +514,61 @@ async function main(): Promise<void> {
     });
     assert.ifError((await normalClient.auth.signOut()).error);
 
-    const successfulRecoveryLink = await requestRecovery(normalClient, mailBase, email);
-    const recoveryTokens = await consumeRecoveryLink(successfulRecoveryLink);
-    assert(recoveryTokens.accessToken && recoveryTokens.refreshToken, 'Recovery token issuance failed');
-    const recoverySet = await recoveryClient.auth.setSession({
-      access_token: recoveryTokens.accessToken,
-      refresh_token: recoveryTokens.refreshToken,
+    const implicitRecoveryLink = await requestRecovery(normalClient, mailBase, email);
+    const implicitRedirect = await consumeRecoveryLink(implicitRecoveryLink);
+    assert.equal(implicitRedirect.kind, 'implicit');
+    assert(
+      implicitRedirect.accessToken && implicitRedirect.refreshToken,
+      'Implicit recovery token issuance failed',
+    );
+    const implicitSet = await implicitRecoveryClient.auth.setSession({
+      access_token: implicitRedirect.accessToken,
+      refresh_token: implicitRedirect.refreshToken,
     });
-    assert.ifError(recoverySet.error);
-    const recovery = await requireSession(recoverySet.data.session, 'recovery_pending_v1');
+    assert.ifError(implicitSet.error);
+    const implicitRecovery = await requireSession(implicitSet.data.session, 'normal_v1');
+    const implicitSessionId = implicitRecovery.claims.session_id;
+    const implicitEvents = await hookEvents(database, disposableUserId, implicitSessionId);
+    const implicitAuthenticationMethod = implicitEvents[0]?.authentication_method;
+    assert(implicitAuthenticationMethod, 'Implicit recovery hook event was not observed');
+    assert.notEqual(implicitAuthenticationMethod, 'recovery');
+    assert.equal(await gatePresent(database, implicitSessionId), false);
+    phases.push({
+      phase: 'Implicit recovery issuance',
+      authentication_method: implicitAuthenticationMethod,
+      session_id: implicitSessionId,
+      purplelok_session_state: implicitRecovery.claims.purplelok_session_state,
+      gate_present: false,
+    });
+    assert.ifError((await implicitRecoveryClient.auth.signOut({ scope: 'global' })).error);
+
+    const successfulRecoveryLink = await requestRecovery(pkceRecoveryClient, mailBase, email);
+    const recoveryRedirect = await consumeRecoveryLink(successfulRecoveryLink);
+    assert.equal(recoveryRedirect.kind, 'pkce');
+    assert(recoveryRedirect.code, 'PKCE recovery redirect did not contain an Auth Code');
+    assert.equal(recoveryRedirect.accessToken, null);
+    assert.equal(recoveryRedirect.refreshToken, null);
+    const recoveryExchange = await pkceRecoveryClient.auth.exchangeCodeForSession(
+      recoveryRedirect.code,
+    );
+    assert.ifError(recoveryExchange.error);
+    const recovery = await requireSession(
+      recoveryExchange.data.session,
+      'recovery_pending_v1',
+    );
     const recoverySessionId = recovery.claims.session_id;
     assert.notEqual(recoverySessionId, normalSessionId);
+    assert.notEqual(recoverySessionId, implicitSessionId);
     assert.equal(await gatePresent(database, recoverySessionId), true);
     assert.equal(await sessionPresent(database, recoverySessionId), true);
     const recoveryEvents = await hookEvents(database, disposableUserId, recoverySessionId);
     assert.equal(recoveryEvents[0]?.authentication_method, 'recovery');
     assert.equal(recoveryEvents[0]?.session_state, 'recovery_pending_v1');
-    const liveRecoveryUser = await recoveryClient.auth.getUser();
+    const liveRecoveryUser = await pkceRecoveryClient.auth.getUser();
     assert.ifError(liveRecoveryUser.error);
     assert.equal(liveRecoveryUser.data.user?.id, disposableUserId);
     phases.push({
-      phase: 'Recovery issuance',
+      phase: 'PKCE recovery issuance',
       authentication_method: 'recovery',
       session_id: recoverySessionId,
       purplelok_session_state: recovery.claims.purplelok_session_state,
@@ -500,11 +579,21 @@ async function main(): Promise<void> {
       'update private.auth_hook_probe_control set force_recovery_failure = true where singleton',
     );
     const stateBeforeForcedFailure = await userAuthStateCounts(database, disposableUserId);
-    const failingRecoveryLink = await requestRecovery(normalClient, mailBase, email);
-    const failedTokens = await consumeRecoveryLink(failingRecoveryLink);
-    assert.equal(failedTokens.accessToken, null, 'Auth issued an access token after hook failure');
-    assert.equal(failedTokens.refreshToken, null, 'Auth issued a refresh token after hook failure');
-    assert(failedTokens.status >= 400 || failedTokens.status === 302 || failedTokens.status === 303);
+    const failingPkceClient = makePkceClient(apiUrl, anonKey);
+    const failingRecoveryLink = await requestRecovery(failingPkceClient, mailBase, email);
+    const failedRedirect = await consumeRecoveryLink(failingRecoveryLink);
+    assert.equal(failedRedirect.kind, 'pkce');
+    assert(failedRedirect.code, 'Failing PKCE recovery redirect did not contain an Auth Code');
+    assert.equal(failedRedirect.accessToken, null);
+    assert.equal(failedRedirect.refreshToken, null);
+    const failedExchange = await failingPkceClient.auth.exchangeCodeForSession(
+      failedRedirect.code,
+    );
+    assert(failedExchange.error, 'Hook failure did not reject the PKCE exchange');
+    assert.equal(failedExchange.data.session, null);
+    const failedClientSession = await failingPkceClient.auth.getSession();
+    assert.ifError(failedClientSession.error);
+    assert.equal(failedClientSession.data.session, null, 'Failed PKCE exchange left a usable session');
     assert.deepEqual(
       await userAuthStateCounts(database, disposableUserId),
       stateBeforeForcedFailure,
@@ -515,9 +604,9 @@ async function main(): Promise<void> {
     );
 
     const eventsBeforePasswordUpdate = (await hookEvents(database, disposableUserId, recoverySessionId)).length;
-    const passwordUpdate = await recoveryClient.auth.updateUser({ password: newPassword });
+    const passwordUpdate = await pkceRecoveryClient.auth.updateUser({ password: newPassword });
     assert.ifError(passwordUpdate.error);
-    const afterPasswordUpdateResult = await recoveryClient.auth.getSession();
+    const afterPasswordUpdateResult = await pkceRecoveryClient.auth.getSession();
     assert.ifError(afterPasswordUpdateResult.error);
     const afterPasswordUpdate = await requireSession(
       afterPasswordUpdateResult.data.session,
@@ -537,7 +626,7 @@ async function main(): Promise<void> {
       gate_present: true,
     });
 
-    const recoveryRefreshResult = await recoveryClient.auth.refreshSession();
+    const recoveryRefreshResult = await pkceRecoveryClient.auth.refreshSession();
     assert.ifError(recoveryRefreshResult.error);
     const recoveryRefresh = await requireSession(
       recoveryRefreshResult.data.session,
@@ -577,7 +666,7 @@ async function main(): Promise<void> {
       }
     }
 
-    assert.ifError((await recoveryClient.auth.signOut({ scope: 'global' })).error);
+    assert.ifError((await pkceRecoveryClient.auth.signOut({ scope: 'global' })).error);
     const recoverySignoutState = await waitForSessionCleanup(database, recoverySessionId);
     assert(
       !recoverySignoutState.gatePresent || recoverySignoutState.sessionPresent,
@@ -663,6 +752,23 @@ async function main(): Promise<void> {
       password_update_preserved_session_id: true,
       recovery_refresh_preserved_session_id: true,
       recovery_gate_survived_password_update_and_refresh: true,
+      implicit_vs_pkce: {
+        implicit: {
+          authentication_method: implicitAuthenticationMethod,
+          gate_created: false,
+          session_state: implicitRecovery.claims.purplelok_session_state,
+          safe_for_session_gate_architecture: false,
+        },
+        pkce: {
+          authentication_method: recoveryEvents[0]?.authentication_method,
+          gate_created: true,
+          session_state: recovery.claims.purplelok_session_state,
+          refresh_retained_gated_identity:
+            recoveryRefresh.claims.session_id === recoverySessionId
+            && refreshedGate.rows[0]?.observed_refresh === true,
+          safe_for_session_gate_architecture: true,
+        },
+      },
       recovery_signout: {
         auth_session_present: recoverySignoutState.sessionPresent,
         gate_present: recoverySignoutState.gatePresent,
