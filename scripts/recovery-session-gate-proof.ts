@@ -420,7 +420,11 @@ async function main(): Promise<void> {
       expectedAuthVersion,
       'Disposable Auth version does not match the production-equivalent proof target',
     );
-    const postgresVersion = (await database.query<{ version: string }>('show server_version')).rows[0]?.version;
+    const postgresVersion = (
+      await database.query<{ version: string }>(
+        "select current_setting('server_version') as version",
+      )
+    ).rows[0]?.version;
     assert(
       postgresVersion?.startsWith(expectedPostgresVersionPrefix),
       'Disposable PostgreSQL version does not match the proof target',
