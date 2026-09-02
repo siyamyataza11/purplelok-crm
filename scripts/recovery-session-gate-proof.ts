@@ -26,6 +26,8 @@ interface HookEvent {
   authentication_method: string;
   session_id: string;
   session_state: string;
+  execution_current_user: string;
+  execution_session_user: string;
 }
 
 interface PhaseResult {
@@ -95,7 +97,8 @@ async function hookEvents(
   sessionId?: string,
 ): Promise<HookEvent[]> {
   const result = await database.query<HookEvent>(
-    `select authentication_method, session_id::text, session_state
+    `select authentication_method, session_id::text, session_state,
+            execution_current_user::text, execution_session_user::text
        from private.auth_hook_event_probe
       where user_id = $1
         and ($2::uuid is null or session_id = $2::uuid)
@@ -160,8 +163,10 @@ async function expectMalformedHookRejected(
   description: string,
 ): Promise<void> {
   await database.query('begin');
+  let operation = 'SET LOCAL ROLE supabase_auth_admin';
   try {
     await database.query('set local role supabase_auth_admin');
+    operation = `hook invocation: ${description}`;
     await database.query(
       'select private.batch_5f_b1_custom_access_token_hook($1::jsonb)',
       [JSON.stringify(event)],
@@ -169,7 +174,61 @@ async function expectMalformedHookRejected(
     assert.fail(`${description} was accepted`);
   } catch (error) {
     const code = objectValue(error)?.code;
-    assert.equal(code, 'P0001', `${description} failed for an unexpected reason`);
+    assert.equal(code, 'P0001', `${operation} returned SQLSTATE ${String(code)}`);
+  } finally {
+    await database.query('rollback');
+  }
+}
+
+async function assertHookAclPreconditions(database: pg.Client): Promise<{
+  current_user: string;
+  session_user: string;
+}> {
+  const result = await database.query<Record<string, boolean>>(`select
+    has_schema_privilege(
+      'supabase_auth_admin', 'private', 'USAGE'
+    ) as schema_usage,
+    has_function_privilege(
+      'supabase_auth_admin',
+      'private.batch_5f_b1_custom_access_token_hook(jsonb)',
+      'EXECUTE'
+    ) as function_execute,
+    has_table_privilege(
+      'supabase_auth_admin', 'private.auth_hook_probe_control', 'SELECT'
+    ) as control_select,
+    has_table_privilege(
+      'supabase_auth_admin', 'private.auth_hook_event_probe', 'INSERT'
+    ) as event_insert,
+    has_table_privilege(
+      'supabase_auth_admin', 'private.auth_session_gate_probe', 'SELECT'
+    ) as gate_select,
+    has_table_privilege(
+      'supabase_auth_admin', 'private.auth_session_gate_probe', 'INSERT'
+    ) as gate_insert,
+    has_table_privilege(
+      'supabase_auth_admin', 'private.auth_session_gate_probe', 'UPDATE'
+    ) as gate_update`);
+  const privileges = result.rows[0];
+  assert(privileges, 'Hook ACL precheck returned no row');
+  const missing = Object.entries(privileges)
+    .filter(([, granted]) => !granted)
+    .map(([privilege]) => privilege);
+  assert.deepEqual(missing, [], `Missing hook privileges: ${missing.join(', ')}`);
+
+  await database.query('begin');
+  try {
+    await database.query('set local role supabase_auth_admin');
+    const roleResult = await database.query<{
+      current_user: string;
+      session_user: string;
+    }>('select current_user::text, session_user::text');
+    const roles = roleResult.rows[0];
+    assert(roles, 'SET ROLE probe returned no row');
+    assert.equal(roles.current_user, 'supabase_auth_admin');
+    return roles;
+  } catch (error) {
+    const code = objectValue(error)?.code;
+    throw new Error(`SET LOCAL ROLE supabase_auth_admin returned SQLSTATE ${String(code)}`);
   } finally {
     await database.query('rollback');
   }
@@ -346,6 +405,7 @@ async function main(): Promise<void> {
   try {
     const sql = await readFile(PROBE_SQL, 'utf8');
     await database.query(sql);
+    const setRoleProbe = await assertHookAclPreconditions(database);
     await expectMalformedHookRejected(database, {}, 'Missing claims object');
     await expectMalformedHookRejected(database, {
       user_id: '00000000-0000-0000-0000-000000000001',
@@ -589,6 +649,12 @@ async function main(): Promise<void> {
         security_mode: 'INVOKER',
         search_path: '',
         execute: functionAcl.rows[0],
+        direct_test_role: setRoleProbe,
+        genuine_execution_roles: [...new Set(
+          (await hookEvents(database, disposableUserId)).map((event) =>
+            `${event.execution_current_user}/${event.execution_session_user}`,
+          ),
+        )],
       },
       hook_failure_blocked_token_issuance: true,
       password_update_preserved_session_id: true,
