@@ -10,12 +10,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: batch-5e-b2r-database-validation-${{ github.ref }}
+  group: batch-5f-c1-database-validation-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   database-tests:
-    name: Batch 5E-B2R isolated validation
+    name: Batch 5F-C1 isolated validation
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -88,11 +88,12 @@ jobs:
             20260828170000_batch_4_active_organization_context.sql
             20260829100000_batch_5a_tenant_data_foundation.sql
             20260831120000_batch_5e_b2r_profile_authority.sql
+            20260902120000_batch_5f_c1_auth_session_gate.sql
           )
 
           mapfile -t actual < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort)
           if [[ "${actual[*]}" != "${expected[*]}" ]]; then
-            echo "Migration inventory differs from the approved seven-file Batch 5E-B2R sequence."
+            echo "Migration inventory differs from the approved eight-file Batch 5F-C1 sequence."
             printf 'Expected: %s\n' "${expected[@]}"
             printf 'Actual: %s\n' "${actual[@]}"
             exit 1
@@ -198,6 +199,14 @@ jobs:
           supabase migration up --local
           supabase test db --local supabase/tests/database/batch_5e_b2r_profile_authority.test.sql
 
+      - name: Apply and test Batch 5F-C1 Auth session gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ steps.migrations.outputs.store }}/20260902120000_batch_5f_c1_auth_session_gate.sql" supabase/migrations/
+          supabase migration up --local
+          supabase test db --local supabase/tests/database/batch_5f_c1_auth_session_gate.test.sql
+
       - name: Validate frontend and scripts under Node 22
         shell: bash
         run: |
@@ -218,7 +227,7 @@ jobs:
         run: supabase stop --no-backup
 
   recovery-session-gate-proof:
-    name: Batch 5F-B1 disposable Auth proof
+    name: Batch 5F-C1 disposable Auth lifecycle proof
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -267,22 +276,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          perl -0pi -e 's/# \[auth\.hook\.custom_access_token\]\n# enabled = true\n# uri = "pg-functions:\/\/<database>\/<schema>\/<hook_name>"/[auth.hook.custom_access_token]\nenabled = true\nuri = "pg-functions:\/\/postgres\/private\/batch_5f_b1_custom_access_token_hook"/' supabase/config.toml
+          perl -0pi -e 's/# \[auth\.hook\.custom_access_token\]\n# enabled = true\n# uri = "pg-functions:\/\/<database>\/<schema>\/<hook_name>"/[auth.hook.custom_access_token]\nenabled = true\nuri = "pg-functions:\/\/postgres\/private\/batch_5f_c1_observing_hook"/' supabase/config.toml
           grep -Fq '[auth.hook.custom_access_token]' supabase/config.toml
-          grep -Fq 'uri = "pg-functions://postgres/private/batch_5f_b1_custom_access_token_hook"' supabase/config.toml
+          grep -Fq 'uri = "pg-functions://postgres/private/batch_5f_c1_observing_hook"' supabase/config.toml
 
       - name: Isolate production migrations from the disposable Auth proof
         id: isolate-migrations
         shell: bash
         run: |
           set -euo pipefail
-          migration_store="${RUNNER_TEMP}/batch-5f-b1-production-migrations"
+          migration_store="${RUNNER_TEMP}/batch-5f-c1-prior-migrations"
           mkdir -p "${migration_store}"
           shopt -s nullglob
           migrations=(supabase/migrations/*.sql)
           [[ "${#migrations[@]}" -gt 0 ]]
-          mv "${migrations[@]}" "${migration_store}/"
-          [[ -z "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -print -quit)" ]]
+          for migration in "${migrations[@]}"; do
+            if [[ "$(basename "${migration}")" != "20260902120000_batch_5f_c1_auth_session_gate.sql" ]]; then
+              mv "${migration}" "${migration_store}/"
+            fi
+          done
+          mapfile -t remaining < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort)
+          [[ "${remaining[*]}" == "20260902120000_batch_5f_c1_auth_session_gate.sql" ]]
           echo "migration_store=${migration_store}" >> "${GITHUB_OUTPUT}"
 
       - name: Start complete disposable Supabase stack

@@ -1,5 +1,5 @@
 /**
- * Batch 5F-B1 disposable Supabase Auth proof.
+ * Batch 5F-C1 disposable Supabase Auth proof.
  *
  * This script refuses non-local URLs and never prints credentials, tokens,
  * passwords, OTPs, recovery links, or email bodies.
@@ -18,8 +18,70 @@ import pg from 'pg';
 
 const { Client } = pg;
 const PRODUCTION_PROJECT_REF = 'vkgvfllqgfleosufzwhc';
-const PROBE_SQL = 'supabase/tests/setup/batch_5f_b1_recovery_gate_probe.sql';
 const RECOVERY_REDIRECT = 'http://127.0.0.1:3000/auth/recovery';
+const OBSERVER_SQL = String.raw`
+begin;
+
+create table private.auth_hook_event_probe (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  session_id uuid not null,
+  authentication_method text not null,
+  session_state text not null,
+  execution_current_user name not null,
+  execution_session_user name not null,
+  observed_at timestamptz not null default pg_catalog.clock_timestamp()
+);
+
+alter table private.auth_hook_event_probe enable row level security;
+revoke all on table private.auth_hook_event_probe from public, anon, authenticated, service_role;
+grant insert on table private.auth_hook_event_probe to supabase_auth_admin;
+
+create policy auth_hook_event_probe_insert
+on private.auth_hook_event_probe
+as permissive
+for insert
+to supabase_auth_admin
+with check (true);
+
+create function private.batch_5f_c1_observing_hook(event jsonb)
+returns jsonb
+language plpgsql
+volatile
+security invoker
+set search_path = ''
+set row_security = on
+as $function$
+declare
+  result jsonb;
+begin
+  result := private.purplelok_custom_access_token_hook(event);
+
+  insert into private.auth_hook_event_probe (
+    user_id,
+    session_id,
+    authentication_method,
+    session_state,
+    execution_current_user,
+    execution_session_user
+  ) values (
+    (event ->> 'user_id')::uuid,
+    (event -> 'claims' ->> 'session_id')::uuid,
+    event ->> 'authentication_method',
+    result -> 'claims' ->> 'purplelok_session_state',
+    current_user,
+    session_user
+  );
+
+  return result;
+end;
+$function$;
+
+alter function private.batch_5f_c1_observing_hook(jsonb) owner to postgres;
+revoke all on function private.batch_5f_c1_observing_hook(jsonb) from public, anon, authenticated, service_role;
+grant execute on function private.batch_5f_c1_observing_hook(jsonb) to supabase_auth_admin;
+
+commit;
+`;
 
 interface JwtClaims {
   sub: string;
@@ -146,7 +208,7 @@ async function hookEvents(
 async function gatePresent(database: pg.Client, sessionId: string): Promise<boolean> {
   const result = await database.query<{ present: boolean }>(
     `select exists (
-       select 1 from private.auth_session_gate_probe where session_id = $1
+       select 1 from private.auth_session_gates where session_id = $1
      ) as present`,
     [sessionId],
   );
@@ -165,7 +227,7 @@ async function userAuthStateCounts(database: pg.Client, userId: string): Promise
   const result = await database.query<UserAuthStateCounts>(
     `select
        (select count(*)::integer from auth.sessions where user_id = $1) as sessions,
-       (select count(*)::integer from private.auth_session_gate_probe where user_id = $1) as gates`,
+       (select count(*)::integer from private.auth_session_gates where user_id = $1) as gates`,
     [userId],
   );
   const counts = result.rows[0];
@@ -201,7 +263,7 @@ async function expectMalformedHookRejected(
   const operation = `direct postgres hook invocation: ${description}`;
   try {
     await database.query(
-      'select private.batch_5f_b1_custom_access_token_hook($1::jsonb)',
+      'select private.purplelok_custom_access_token_hook($1::jsonb)',
       [JSON.stringify(event)],
     );
     assert.fail(`${description} was accepted`);
@@ -222,23 +284,31 @@ async function assertHookAclPreconditions(
     ) as schema_usage,
     has_function_privilege(
       'supabase_auth_admin',
-      'private.batch_5f_b1_custom_access_token_hook(jsonb)',
+      'private.batch_5f_c1_observing_hook(jsonb)',
       'EXECUTE'
-    ) as function_execute,
-    has_table_privilege(
-      'supabase_auth_admin', 'private.auth_hook_probe_control', 'SELECT'
-    ) as control_select,
+    ) as observer_execute,
+    has_function_privilege(
+      'supabase_auth_admin',
+      'private.purplelok_custom_access_token_hook(jsonb)',
+      'EXECUTE'
+    ) as permanent_hook_execute,
     has_table_privilege(
       'supabase_auth_admin', 'private.auth_hook_event_probe', 'INSERT'
     ) as event_insert,
     has_table_privilege(
-      'supabase_auth_admin', 'private.auth_session_gate_probe', 'SELECT'
+      'supabase_auth_admin', 'private.auth_session_gates', 'SELECT'
     ) as gate_select,
-    has_table_privilege(
-      'supabase_auth_admin', 'private.auth_session_gate_probe', 'INSERT'
+    has_column_privilege(
+      'supabase_auth_admin', 'private.auth_session_gates', 'session_id', 'INSERT'
+    ) and has_column_privilege(
+      'supabase_auth_admin', 'private.auth_session_gates', 'user_id', 'INSERT'
+    ) and has_column_privilege(
+      'supabase_auth_admin', 'private.auth_session_gates', 'gate_type', 'INSERT'
     ) as gate_insert,
-    has_table_privilege(
-      'supabase_auth_admin', 'private.auth_session_gate_probe', 'UPDATE'
+    has_column_privilege(
+      'supabase_auth_admin', 'private.auth_session_gates', 'observed_refresh', 'UPDATE'
+    ) and has_column_privilege(
+      'supabase_auth_admin', 'private.auth_session_gates', 'last_observed_at', 'UPDATE'
     ) as gate_update`);
   const privileges = result.rows[0];
   assert(privileges, 'Hook ACL precheck returned no row');
@@ -413,7 +483,7 @@ async function main(): Promise<void> {
   assertDisposableUrl(databaseUrl, 'Database');
   const mailBase = assertDisposableUrl(mailUrl, 'Mail API').toString().replace(/\/$/, '');
 
-  const database = new Client({ connectionString: databaseUrl, application_name: 'batch-5f-b1-proof' });
+  const database = new Client({ connectionString: databaseUrl, application_name: 'batch-5f-c1-proof' });
   const admin = createClient(apiUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
   });
@@ -428,8 +498,7 @@ async function main(): Promise<void> {
 
   await database.connect();
   try {
-    const sql = await readFile(PROBE_SQL, 'utf8');
-    await database.query(sql);
+    await database.query(OBSERVER_SQL);
     const hookAclPreconditions = await assertHookAclPreconditions(database);
     await expectMalformedHookRejected(database, {}, 'Missing claims object');
     await expectMalformedHookRejected(database, {
@@ -576,32 +645,40 @@ async function main(): Promise<void> {
     });
 
     await database.query(
-      'update private.auth_hook_probe_control set force_recovery_failure = true where singleton',
+      `revoke insert (session_id, user_id, gate_type)
+         on private.auth_session_gates
+       from supabase_auth_admin`,
     );
-    const stateBeforeForcedFailure = await userAuthStateCounts(database, disposableUserId);
-    const failingPkceClient = makePkceClient(apiUrl, anonKey);
-    const failingRecoveryLink = await requestRecovery(failingPkceClient, mailBase, email);
-    const failedRedirect = await consumeRecoveryLink(failingRecoveryLink);
-    assert.equal(failedRedirect.kind, 'pkce');
-    assert(failedRedirect.code, 'Failing PKCE recovery redirect did not contain an Auth Code');
-    assert.equal(failedRedirect.accessToken, null);
-    assert.equal(failedRedirect.refreshToken, null);
-    const failedExchange = await failingPkceClient.auth.exchangeCodeForSession(
-      failedRedirect.code,
-    );
-    assert(failedExchange.error, 'Hook failure did not reject the PKCE exchange');
-    assert.equal(failedExchange.data.session, null);
-    const failedClientSession = await failingPkceClient.auth.getSession();
-    assert.ifError(failedClientSession.error);
-    assert.equal(failedClientSession.data.session, null, 'Failed PKCE exchange left a usable session');
-    assert.deepEqual(
-      await userAuthStateCounts(database, disposableUserId),
-      stateBeforeForcedFailure,
-      'Failed gate insertion left partial Auth or gate state',
-    );
-    await database.query(
-      'update private.auth_hook_probe_control set force_recovery_failure = false where singleton',
-    );
+    try {
+      const stateBeforeForcedFailure = await userAuthStateCounts(database, disposableUserId);
+      const failingPkceClient = makePkceClient(apiUrl, anonKey);
+      const failingRecoveryLink = await requestRecovery(failingPkceClient, mailBase, email);
+      const failedRedirect = await consumeRecoveryLink(failingRecoveryLink);
+      assert.equal(failedRedirect.kind, 'pkce');
+      assert(failedRedirect.code, 'Failing PKCE recovery redirect did not contain an Auth Code');
+      assert.equal(failedRedirect.accessToken, null);
+      assert.equal(failedRedirect.refreshToken, null);
+      const failedExchange = await failingPkceClient.auth.exchangeCodeForSession(
+        failedRedirect.code,
+      );
+      assert(failedExchange.error, 'Hook failure did not reject the PKCE exchange');
+      assert.equal(failedExchange.data.session, null);
+      const failedClientSession = await failingPkceClient.auth.getSession();
+      assert.ifError(failedClientSession.error);
+      assert.equal(failedClientSession.data.session, null, 'Failed PKCE exchange left a usable session');
+      assert.deepEqual(
+        await userAuthStateCounts(database, disposableUserId),
+        stateBeforeForcedFailure,
+        'Failed gate insertion left partial Auth or gate state',
+      );
+    } finally {
+      await database.query(
+        `grant insert (session_id, user_id, gate_type)
+           on private.auth_session_gates
+           to supabase_auth_admin`,
+      );
+    }
+    await assertHookAclPreconditions(database);
 
     const eventsBeforePasswordUpdate = (await hookEvents(database, disposableUserId, recoverySessionId)).length;
     const passwordUpdate = await pkceRecoveryClient.auth.updateUser({ password: newPassword });
@@ -637,7 +714,7 @@ async function main(): Promise<void> {
     assert.equal(refreshedEvents.at(-1)?.authentication_method, 'token_refresh');
     assert.equal(refreshedEvents.at(-1)?.session_state, 'recovery_pending_v1');
     const refreshedGate = await database.query<{ observed_refresh: boolean }>(
-      'select observed_refresh from private.auth_session_gate_probe where session_id = $1',
+      'select observed_refresh from private.auth_session_gates where session_id = $1',
       [recoverySessionId],
     );
     assert.equal(refreshedGate.rows[0]?.observed_refresh, true);
@@ -651,12 +728,12 @@ async function main(): Promise<void> {
 
     const aclResults: Record<string, Record<string, boolean>> = {};
     const statements = {
-      SELECT: 'select * from private.auth_session_gate_probe',
-      INSERT: `insert into private.auth_session_gate_probe
-        (session_id,user_id,gate_type,first_authentication_method)
-        values ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','RECOVERY_PENDING','recovery')`,
-      UPDATE: "update private.auth_session_gate_probe set gate_type = 'RECOVERY_PENDING'",
-      DELETE: 'delete from private.auth_session_gate_probe',
+      SELECT: 'select * from private.auth_session_gates',
+      INSERT: `insert into private.auth_session_gates
+        (session_id,user_id,gate_type)
+        values ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','RECOVERY_PENDING')`,
+      UPDATE: 'update private.auth_session_gates set observed_refresh = true',
+      DELETE: 'delete from private.auth_session_gates',
     } as const;
     for (const role of ['anon', 'authenticated', 'service_role'] as const) {
       aclResults[role] = {};
@@ -708,7 +785,7 @@ async function main(): Promise<void> {
       authenticated: boolean;
       service_role: boolean;
     }>(`select
-      has_function_privilege('supabase_auth_admin', 'private.batch_5f_b1_custom_access_token_hook(jsonb)', 'EXECUTE') auth_admin,
+      has_function_privilege('supabase_auth_admin', 'private.purplelok_custom_access_token_hook(jsonb)', 'EXECUTE') auth_admin,
       exists (
         select 1
         from pg_catalog.pg_proc as procedure
@@ -718,13 +795,13 @@ async function main(): Promise<void> {
             pg_catalog.acldefault('f', procedure.proowner)
           )
         ) as privilege
-        where procedure.oid = 'private.batch_5f_b1_custom_access_token_hook(jsonb)'::regprocedure
+        where procedure.oid = 'private.purplelok_custom_access_token_hook(jsonb)'::regprocedure
           and privilege.grantee = 0
           and privilege.privilege_type = 'EXECUTE'
       ) public_execute,
-      has_function_privilege('anon', 'private.batch_5f_b1_custom_access_token_hook(jsonb)', 'EXECUTE') anon,
-      has_function_privilege('authenticated', 'private.batch_5f_b1_custom_access_token_hook(jsonb)', 'EXECUTE') authenticated,
-      has_function_privilege('service_role', 'private.batch_5f_b1_custom_access_token_hook(jsonb)', 'EXECUTE') service_role`);
+      has_function_privilege('anon', 'private.purplelok_custom_access_token_hook(jsonb)', 'EXECUTE') anon,
+      has_function_privilege('authenticated', 'private.purplelok_custom_access_token_hook(jsonb)', 'EXECUTE') authenticated,
+      has_function_privilege('service_role', 'private.purplelok_custom_access_token_hook(jsonb)', 'EXECUTE') service_role`);
     assert.equal(functionAcl.rows[0]?.auth_admin, true);
     assert.equal(functionAcl.rows[0]?.public_execute, false);
     assert.equal(functionAcl.rows[0]?.anon, false);
