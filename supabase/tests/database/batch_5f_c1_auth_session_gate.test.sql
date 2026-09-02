@@ -29,7 +29,7 @@ SELECT is(
   'gate table has exactly the six approved columns, types, order, and nullability'
 );
 
-SELECT like(
+SELECT extensions.alike(
   (SELECT pg_catalog.pg_get_expr(default_row.adbin, default_row.adrelid)
      FROM pg_catalog.pg_attrdef AS default_row
      JOIN pg_catalog.pg_attribute AS attribute
@@ -37,10 +37,11 @@ SELECT like(
       AND attribute.attnum = default_row.adnum
     WHERE default_row.adrelid = 'private.auth_session_gates'::regclass
       AND attribute.attname = 'created_at'),
-  '%clock_timestamp()%','created_at defaults to clock_timestamp()'
+  '%clock_timestamp()%'::text,
+  'created_at defaults to clock_timestamp()'::text
 );
 
-SELECT like(
+SELECT extensions.alike(
   (SELECT pg_catalog.pg_get_expr(default_row.adbin, default_row.adrelid)
      FROM pg_catalog.pg_attrdef AS default_row
      JOIN pg_catalog.pg_attribute AS attribute
@@ -48,7 +49,8 @@ SELECT like(
       AND attribute.attnum = default_row.adnum
     WHERE default_row.adrelid = 'private.auth_session_gates'::regclass
       AND attribute.attname = 'last_observed_at'),
-  '%clock_timestamp()%','last_observed_at defaults to clock_timestamp()'
+  '%clock_timestamp()%'::text,
+  'last_observed_at defaults to clock_timestamp()'::text
 );
 
 SELECT is(
@@ -72,13 +74,13 @@ SELECT is(
   'gate table has one primary key'
 );
 
-SELECT like(
+SELECT extensions.alike(
   (SELECT pg_catalog.pg_get_constraintdef(constraint_row.oid)
      FROM pg_catalog.pg_constraint AS constraint_row
     WHERE constraint_row.conrelid = 'private.auth_session_gates'::regclass
       AND constraint_row.conname = 'auth_session_gates_gate_type_check'),
-  '%gate_type%RECOVERY_PENDING%',
-  'gate type is restricted to RECOVERY_PENDING'
+  '%gate_type%RECOVERY_PENDING%'::text,
+  'gate type is restricted to RECOVERY_PENDING'::text
 );
 
 SELECT is(
