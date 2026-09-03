@@ -27,6 +27,10 @@ export const PERMISSION_KEYS = [
   'reports.read',
   'settings.read',
   'settings.manage',
+  'activities.read',
+  'collaboration.read',
+  'collaboration.write',
+  'collaboration.manage',
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];

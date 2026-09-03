@@ -10,12 +10,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: batch-5f-d1-database-validation-${{ github.ref }}
+  group: batch-5f-d2-database-validation-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   database-tests:
-    name: Batch 5F-D1 isolated validation
+    name: Batch 5F-D2 isolated validation
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -90,11 +90,12 @@ jobs:
             20260831120000_batch_5e_b2r_profile_authority.sql
             20260902120000_batch_5f_c1_auth_session_gate.sql
             20260903120000_batch_5f_d1_authorization_foundation.sql
+            20260903180000_batch_5f_d2_permission_catalogue.sql
           )
 
           mapfile -t actual < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort)
           if [[ "${actual[*]}" != "${expected[*]}" ]]; then
-            echo "Migration inventory differs from the approved nine-file Batch 5F-D1 sequence."
+            echo "Migration inventory differs from the approved ten-file Batch 5F-D2 sequence."
             printf 'Expected: %s\n' "${expected[@]}"
             printf 'Actual: %s\n' "${actual[@]}"
             exit 1
@@ -215,6 +216,24 @@ jobs:
           cp "${{ steps.migrations.outputs.store }}/20260903120000_batch_5f_d1_authorization_foundation.sql" supabase/migrations/
           supabase migration up --local
           supabase test db --local supabase/tests/database/batch_5f_d1_authorization_foundation.test.sql
+
+      - name: Apply and test Batch 5F-D2 permission catalogue
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i "${{ steps.database.outputs.container }}" \
+            psql -X --set ON_ERROR_STOP=1 --username postgres --dbname postgres \
+            < supabase/tests/setup/batch_5f_d2_reconciliation_drift.sql
+          cp "${{ steps.migrations.outputs.store }}/20260903180000_batch_5f_d2_permission_catalogue.sql" supabase/migrations/
+          supabase migration up --local
+          supabase test db --local supabase/tests/database/batch_5f_d2_permission_catalogue.test.sql
+
+      - name: Re-run D1 and prove D2 guards remain active
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase test db --local supabase/tests/database/batch_5f_d1_authorization_foundation.test.sql
+          supabase test db --local supabase/tests/database/batch_5f_d2_permission_catalogue.test.sql
 
       - name: Validate frontend and scripts under Node 22
         shell: bash

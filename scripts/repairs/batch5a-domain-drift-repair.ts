@@ -171,7 +171,7 @@ function assertTriggerBaseline(triggers: readonly TriggerSnapshot[]): void {
 function assertCommon(snapshot: RepairSnapshot): void {
   assertTriggerBaseline(snapshot.triggers);
   if (snapshot.demoOrganizationId === snapshot.realOrganizationId) fail('Real and Demo organizations resolve to the same ID');
-  if (snapshot.permissionCount !== 28 || snapshot.platformAdminCount !== 0 || snapshot.clientAssignmentCount !== 0) {
+  if (snapshot.permissionCount !== 32 || snapshot.platformAdminCount !== 0 || snapshot.clientAssignmentCount !== 0) {
     fail('RBAC invariants differ from the approved production baseline');
   }
   if (snapshot.tenantConstraintCount !== 22 || snapshot.validTenantConstraintCount !== 22) {

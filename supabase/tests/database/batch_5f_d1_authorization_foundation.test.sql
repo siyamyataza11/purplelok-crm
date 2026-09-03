@@ -145,6 +145,34 @@ VALUES
   ('00000000-0000-0000-0000-00000005d406', '00000000-0000-0000-0000-00000005d101', 'D1 Owner', 'owner', true),
   ('00000000-0000-0000-0000-00000005d407', '00000000-0000-0000-0000-00000005d104', 'D1 Archived Staff', 'staff', true);
 
+-- When this historical D1 suite is rerun after D2, create its intentionally
+-- invalid Client fixtures under postgres with only the two D2 Client guards
+-- transaction-locally suppressed. The guards are restored immediately below;
+-- the complete test transaction is always rolled back.
+DO $d2_fixture_guards$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_trigger
+    WHERE tgrelid = 'public.organization_role_permissions'::regclass
+      AND tgname = 'organization_role_permissions_restrict_client'
+      AND NOT tgisinternal
+  ) THEN
+    EXECUTE 'ALTER TABLE public.organization_role_permissions DISABLE TRIGGER organization_role_permissions_restrict_client';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_trigger
+    WHERE tgrelid = 'public.organization_member_roles'::regclass
+      AND tgname = 'organization_member_roles_reject_client'
+      AND NOT tgisinternal
+  ) THEN
+    EXECUTE 'ALTER TABLE public.organization_member_roles DISABLE TRIGGER organization_member_roles_reject_client';
+  END IF;
+END
+$d2_fixture_guards$;
+
 INSERT INTO public.organization_role_permissions (
   organization_id, organization_role_id, permission_key
 )
@@ -171,6 +199,30 @@ VALUES
   ('00000000-0000-0000-0000-00000005d101', '00000000-0000-0000-0000-00000005d513', '00000000-0000-0000-0000-00000005d401'),
   ('00000000-0000-0000-0000-00000005d101', '00000000-0000-0000-0000-00000005d514', '00000000-0000-0000-0000-00000005d406'),
   ('00000000-0000-0000-0000-00000005d104', '00000000-0000-0000-0000-00000005d515', '00000000-0000-0000-0000-00000005d407');
+
+DO $d2_fixture_guards$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_trigger
+    WHERE tgrelid = 'public.organization_role_permissions'::regclass
+      AND tgname = 'organization_role_permissions_restrict_client'
+      AND NOT tgisinternal
+  ) THEN
+    EXECUTE 'ALTER TABLE public.organization_role_permissions ENABLE TRIGGER organization_role_permissions_restrict_client';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_trigger
+    WHERE tgrelid = 'public.organization_member_roles'::regclass
+      AND tgname = 'organization_member_roles_reject_client'
+      AND NOT tgisinternal
+  ) THEN
+    EXECUTE 'ALTER TABLE public.organization_member_roles ENABLE TRIGGER organization_member_roles_reject_client';
+  END IF;
+END
+$d2_fixture_guards$;
 
 INSERT INTO public.platform_admins (user_id, status)
 VALUES ('00000000-0000-0000-0000-00000005d211', 'active');

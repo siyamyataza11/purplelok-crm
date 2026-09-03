@@ -143,20 +143,20 @@ test('shared matrix defines exactly six system roles', () => {
   );
 });
 
-test('shared matrix defines exactly 96 approved role-permission mappings', () => {
+test('shared matrix defines exactly 113 approved role-permission mappings', () => {
   const counts = Object.fromEntries(
     ROLE_SPECS.map((role) => [role.key, role.permissions.length]),
   );
   assert.deepEqual(counts, {
-    owner: 28,
-    admin: 28,
-    finance: 13,
-    project_manager: 12,
-    staff: 9,
+    owner: 32,
+    admin: 32,
+    finance: 16,
+    project_manager: 15,
+    staff: 12,
     client: 6,
   });
-  assert.equal(ROLE_SPECS.reduce((total, role) => total + role.permissions.length, 0), 96);
-  assert.equal(new Set(PERMISSION_KEYS).size, 28);
+  assert.equal(ROLE_SPECS.reduce((total, role) => total + role.permissions.length, 0), 113);
+  assert.equal(new Set(PERMISSION_KEYS).size, 32);
 });
 
 test('bootstrap user receives active Demo Administrator membership and Admin only', () => {

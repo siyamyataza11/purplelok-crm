@@ -27,6 +27,10 @@ export const PERMISSION_KEYS = [
   'reports.read',
   'settings.read',
   'settings.manage',
+  'activities.read',
+  'collaboration.read',
+  'collaboration.write',
+  'collaboration.manage',
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
@@ -66,6 +70,9 @@ export const ROLE_SPECS: readonly RoleSpec[] = [
       'documents.read',
       'reports.read',
       'settings.read',
+      'members.read',
+      'collaboration.read',
+      'collaboration.write',
     ],
   },
   {
@@ -85,6 +92,9 @@ export const ROLE_SPECS: readonly RoleSpec[] = [
       'tickets.write',
       'reports.read',
       'settings.read',
+      'members.read',
+      'collaboration.read',
+      'collaboration.write',
     ],
   },
   {
@@ -101,6 +111,9 @@ export const ROLE_SPECS: readonly RoleSpec[] = [
       'tickets.read',
       'tickets.write',
       'settings.read',
+      'members.read',
+      'collaboration.read',
+      'collaboration.write',
     ],
   },
   {

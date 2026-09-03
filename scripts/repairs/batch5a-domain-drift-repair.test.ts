@@ -59,7 +59,7 @@ function incidentSnapshot(overrides: Partial<RepairSnapshot> = {}): RepairSnapsh
     manifestDifferences: incidentDifferences(),
     triggers: [trigger()],
     authorityFingerprint: 'approved-authority',
-    permissionCount: 28,
+    permissionCount: 32,
     platformAdminCount: 0,
     clientAssignmentCount: 0,
     tenantConstraintCount: 22,
