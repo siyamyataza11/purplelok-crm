@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   beginSupabaseAuthPersistence,
+  clearRecoveryQuarantineAfterVerifiedRecovery,
   ControlledSupabaseAuthStorage,
+  establishRecoveryQuarantine,
   getSupabaseAuthStorageRevision,
+  isRecoveryQuarantined,
   purgeSupabaseAuthStorage,
   supabaseAuthStorage,
   withPurgedSupabaseAuthSession,
@@ -154,4 +157,60 @@ test('auth storage revision changes for every authority-relevant mutation', () =
   assert.ok(afterWrite > beforeWrite);
   purgeSupabaseAuthStorage();
   assert.ok(getSupabaseAuthStorageRevision() > afterWrite);
+});
+
+test('recovery quarantine persists only a fixed credential-free version marker', () => {
+  const values = new Map<string, string>();
+  installStorage(values);
+  clearRecoveryQuarantineAfterVerifiedRecovery();
+  assert.equal(establishRecoveryQuarantine(), true);
+  assert.equal(isRecoveryQuarantined(), true);
+  assert.deepEqual([...values.values()], ['{"version":"recovery-quarantine-v1"}']);
+  const serialized = JSON.stringify([...values.entries()]);
+  assert.equal(/access_token|refresh_token|password|otp|jwt|recovery-token/i.test(serialized), false);
+});
+
+test('recovery quarantine survives auth-storage adapter recreation', () => {
+  const values = new Map<string, string>();
+  installStorage(values);
+  clearRecoveryQuarantineAfterVerifiedRecovery();
+  establishRecoveryQuarantine();
+  void new ControlledSupabaseAuthStorage();
+  assert.equal(isRecoveryQuarantined(), true);
+  assert.equal(clearRecoveryQuarantineAfterVerifiedRecovery(), true);
+  assert.equal(isRecoveryQuarantined(), false);
+});
+
+test('a corrupt or future recovery marker fails closed', () => {
+  const values = new Map([['purplelok.auth.recovery-quarantine', 'unknown-version']]);
+  installStorage(values);
+  assert.equal(isRecoveryQuarantined(), true);
+  clearRecoveryQuarantineAfterVerifiedRecovery();
+});
+
+test('recovery quarantine cannot clear when durable marker removal fails', () => {
+  const values = new Map<string, string>();
+  installStorage(values, (key) => {
+    if (key === 'purplelok.auth.recovery-quarantine') throw new Error('blocked');
+    values.delete(key);
+  });
+  establishRecoveryQuarantine();
+  assert.equal(clearRecoveryQuarantineAfterVerifiedRecovery(), false);
+  assert.equal(isRecoveryQuarantined(), true);
+  installStorage(values);
+  assert.equal(clearRecoveryQuarantineAfterVerifiedRecovery(), true);
+});
+
+test('an ambiguous recovery-quarantine storage read fails closed', () => {
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      localStorage: {
+        getItem: () => { throw new Error('storage read unavailable'); },
+        setItem: () => undefined,
+        removeItem: () => undefined,
+      },
+    },
+  });
+  assert.equal(isRecoveryQuarantined(), true);
 });

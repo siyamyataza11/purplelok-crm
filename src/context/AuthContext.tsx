@@ -9,13 +9,31 @@ import {
 } from 'react';
 import type { AuthChangeEvent, Session, User } from '@supabase/supabase-js';
 import { AUTH_MESSAGES } from '@/lib/auth-errors';
-import { supabase } from '@/lib/supabase';
+import {
+  exchangePasswordRecoveryCodeOnce,
+  supabase,
+  type PasswordRecoveryExchangeCapability,
+} from '@/lib/supabase';
 import {
   beginSupabaseAuthPersistence,
+  canSafelyClearRecoveryQuarantineAfterPurge,
+  clearRecoveryQuarantineAfterSafePurge,
+  clearRecoveryQuarantineAfterVerifiedRecovery,
+  establishRecoveryQuarantine,
   getSupabaseAuthStorageRevision,
+  isRecoveryQuarantined,
   purgeSupabaseAuthStorage,
+  subscribeRecoveryQuarantine,
   withPurgedSupabaseAuthSession,
 } from '@/lib/supabase-auth-storage';
+import {
+  cleanPasswordRecoveryUrl,
+  getPasswordRecoveryCode,
+  getPasswordRecoveryRedirectUrl,
+  getPurplelokSessionClaims,
+  isPasswordRecoveryCallbackLocation,
+  MINIMUM_PASSWORD_LENGTH,
+} from '@/lib/password-recovery';
 import type { Profile, UserRole } from '@/types';
 
 export type AuthStatus =
@@ -26,6 +44,15 @@ export type AuthStatus =
   | 'verification_error'
   | 'password_recovery';
 
+export type PasswordRecoveryStatus =
+  | 'idle'
+  | 'requesting_reset'
+  | 'reset_email_sent'
+  | 'recovery_session'
+  | 'updating_password'
+  | 'password_updated'
+  | 'recovery_error';
+
 interface AuthContextValue {
   session: Session | null;
   user: User | null;
@@ -34,9 +61,14 @@ interface AuthContextValue {
   status: AuthStatus;
   error: string | null;
   generation: number;
+  recoveryStatus: PasswordRecoveryStatus;
+  recoveryCallbackActive: boolean;
+  recoveryCanUpdate: boolean;
+  recoveryError: string | null;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<{ error: string | null }>;
   resetPassword: (email: string) => Promise<{ error: string | null }>;
+  updateRecoveryPassword: (password: string) => Promise<{ error: string | null }>;
   refreshProfile: () => Promise<void>;
   revalidateAuth: () => Promise<boolean>;
 }
@@ -58,6 +90,15 @@ interface LoginTransition {
   observedEventUserId?: string;
   observedEventAccessToken?: string;
   invalidated?: boolean;
+}
+
+interface RecoveryBinding {
+  source: 'PKCE_CODE_EXCHANGE';
+  eventSequence: number;
+  generation: number;
+  userId: string;
+  accessToken: string;
+  storageRevision: number;
 }
 
 const PROFILE_COLUMNS = [
@@ -117,6 +158,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loginTransitionRef = useRef<LoginTransition | null>(null);
   const retiredUserIdRef = useRef<string | null>(null);
   const signOutInFlightRef = useRef<Promise<void> | null>(null);
+  const [recoveryStatus, setRecoveryStatus] = useState<PasswordRecoveryStatus>('idle');
+  const [recoveryCallbackActive, setRecoveryCallbackActive] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const recoveryBindingRef = useRef<RecoveryBinding | null>(null);
+  const retiredRecoveryAccessTokenRef = useRef<string | null>(null);
+  const recoveryUpdateInFlightRef = useRef(false);
+  const recoveryExchangeInFlightRef = useRef(false);
+  const recoveryRejectedRef = useRef(false);
+  const ignoreQuarantineClearRef = useRef(false);
+
+  const clearRecovery = useCallback((cleanUrl = false) => {
+    retiredRecoveryAccessTokenRef.current = recoveryBindingRef.current?.accessToken
+      ?? retiredRecoveryAccessTokenRef.current;
+    recoveryBindingRef.current = null;
+    recoveryUpdateInFlightRef.current = false;
+    recoveryRejectedRef.current = false;
+    setRecoveryStatus('idle');
+    setRecoveryCallbackActive(false);
+    setRecoveryError(null);
+    if (cleanUrl) cleanPasswordRecoveryUrl(true);
+  }, []);
 
   const publish = useCallback((snapshot: AuthSnapshot) => {
     if (!mountedRef.current) return;
@@ -132,6 +194,57 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isCurrent = useCallback((generation: number) => (
     mountedRef.current && generationRef.current === generation
   ), []);
+
+  const failRecovery = useCallback((
+    message: string = AUTH_MESSAGES.recoveryFailed,
+    requestGeneration?: number,
+  ) => {
+    establishRecoveryQuarantine();
+    const generation = requestGeneration ?? nextGeneration();
+    const previousUserId = authRef.current.user?.id;
+    retiredRecoveryAccessTokenRef.current = recoveryBindingRef.current?.accessToken
+      ?? retiredRecoveryAccessTokenRef.current;
+    recoveryBindingRef.current = null;
+    recoveryUpdateInFlightRef.current = false;
+    recoveryRejectedRef.current = true;
+    intentionalSignInRef.current = false;
+    loginTransitionRef.current = null;
+    retiredUserIdRef.current = previousUserId ?? retiredUserIdRef.current;
+    setRecoveryStatus('recovery_error');
+    setRecoveryCallbackActive(true);
+    setRecoveryError(message);
+    cleanPasswordRecoveryUrl();
+    publish({
+      session: null,
+      user: null,
+      profile: null,
+      loading: false,
+      status: 'verification_error',
+      error: null,
+      generation,
+    });
+  }, [nextGeneration, publish]);
+
+  const enterRecoveryQuarantine = useCallback((
+    message = AUTH_MESSAGES.recoveryFailed,
+  ) => {
+    const generation = nextGeneration();
+    intentionalSignInRef.current = false;
+    loginTransitionRef.current = null;
+    retiredUserIdRef.current = authRef.current.user?.id ?? retiredUserIdRef.current;
+    setRecoveryStatus('recovery_error');
+    setRecoveryCallbackActive(true);
+    setRecoveryError(message);
+    publish({
+      session: null,
+      user: null,
+      profile: null,
+      loading: false,
+      status: 'verification_error',
+      error: null,
+      generation,
+    });
+  }, [nextGeneration, publish]);
 
   const loadRequiredProfile = useCallback(async (userId: string): Promise<Profile> => {
     const result = await supabase
@@ -161,7 +274,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const verifySession = useCallback(async (
     candidateSession: Session,
-    event: AuthChangeEvent | 'REVALIDATION',
+    event: AuthChangeEvent | 'REVALIDATION' | 'PKCE_RECOVERY',
     requestGeneration?: number,
     trustedUserId?: string,
     requireStoredSessionMatch = false,
@@ -177,6 +290,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       && authRef.current.status === 'authenticated';
 
     if (signOutTombstoneRef.current || !expectedUserId) {
+      return false;
+    }
+    const sessionClaims = getPurplelokSessionClaims(candidateSession);
+    if (event !== 'PKCE_RECOVERY'
+      && sessionClaims?.sessionState === 'recovery_pending_v1') {
+      establishRecoveryQuarantine();
+      enterRecoveryQuarantine();
+      return false;
+    }
+    if (event !== 'PKCE_RECOVERY' && isRecoveryQuarantined()) {
+      enterRecoveryQuarantine();
       return false;
     }
 
@@ -208,6 +332,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     try {
+      if (!sessionClaims?.sessionIdExists
+        || sessionClaims.sessionState !== (event === 'PKCE_RECOVERY'
+          ? 'recovery_pending_v1'
+          : 'normal_v1')) {
+        throw new Error('SESSION_AUTHORITY_CLAIM_INVALID');
+      }
       if (requireStoredSessionMatch) {
         const storedResult = await supabase.auth.getSession();
         if (!isCurrent(generation) || signOutTombstoneRef.current) return false;
@@ -249,6 +379,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       verificationFailureRef.current = false;
+      if (event === 'PKCE_RECOVERY') {
+        publish({
+          session: candidateSession,
+          user: liveUser,
+          profile,
+          loading: false,
+          status: 'password_recovery',
+          error: null,
+          generation,
+        });
+        return false;
+      }
+
       if (!profile.active) {
         publish({
           session: candidateSession,
@@ -256,19 +399,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           profile,
           loading: false,
           status: 'account_disabled',
-          error: null,
-          generation,
-        });
-        return false;
-      }
-
-      if (event === 'PASSWORD_RECOVERY') {
-        publish({
-          session: candidateSession,
-          user: liveUser,
-          profile,
-          loading: false,
-          status: 'password_recovery',
           error: null,
           generation,
         });
@@ -300,10 +430,93 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       attemptFailedSessionCleanup();
       return false;
     }
-  }, [attemptFailedSessionCleanup, isCurrent, loadRequiredProfile, nextGeneration, publish]);
+  }, [attemptFailedSessionCleanup, enterRecoveryQuarantine, isCurrent, loadRequiredProfile, nextGeneration, publish]);
+
+  const acceptRecoverySession = useCallback(async (
+    capability: PasswordRecoveryExchangeCapability,
+    requestGeneration?: number,
+    continuation = false,
+  ) => {
+    if (capability.source !== 'PKCE_CODE_EXCHANGE') return false;
+    establishRecoveryQuarantine();
+    const session = capability.session;
+    const existing = recoveryBindingRef.current;
+    const sessionClaims = getPurplelokSessionClaims(session);
+
+    if (!session.user?.id
+      || !sessionClaims?.sessionIdExists
+      || sessionClaims.sessionState !== 'recovery_pending_v1') {
+      failRecovery();
+      return false;
+    }
+
+    if (recoveryRejectedRef.current) return false;
+    if (retiredRecoveryAccessTokenRef.current === session.access_token) return false;
+    if (continuation !== Boolean(existing)) {
+      failRecovery();
+      return false;
+    }
+    if (existing && (existing.userId !== session.user.id
+      || existing.eventSequence !== capability.sequence)) {
+      failRecovery();
+      return false;
+    }
+
+    const generation = requestGeneration ?? nextGeneration();
+    const previousUserId = authRef.current.user?.id;
+    intentionalSignInRef.current = false;
+    loginTransitionRef.current = null;
+    retiredUserIdRef.current = previousUserId ?? retiredUserIdRef.current;
+    verificationFailureRef.current = false;
+    publish({
+      session: null,
+      user: null,
+      profile: null,
+      loading: true,
+      status: 'loading',
+      error: null,
+      generation,
+    });
+    const verifiedAsRecovery = await verifySession(
+      session,
+      'PKCE_RECOVERY',
+      generation,
+      existing?.userId,
+      true,
+    );
+    void verifiedAsRecovery;
+
+    if (!isCurrent(generation)
+      || signOutTombstoneRef.current
+      || authRef.current.status !== 'password_recovery'
+      || authRef.current.user?.id !== session.user.id
+      || authRef.current.session?.access_token !== session.access_token) {
+      if (isCurrent(generation)) failRecovery();
+      return false;
+    }
+
+    recoveryBindingRef.current = {
+      source: capability.source,
+      eventSequence: capability.sequence,
+      generation,
+      userId: session.user.id,
+      accessToken: session.access_token,
+      storageRevision: getSupabaseAuthStorageRevision(),
+    };
+    recoveryRejectedRef.current = false;
+    setRecoveryStatus('recovery_session');
+    setRecoveryCallbackActive(true);
+    setRecoveryError(null);
+    cleanPasswordRecoveryUrl();
+    return true;
+  }, [failRecovery, isCurrent, nextGeneration, publish, verifySession]);
 
   const revalidateAuth = useCallback(async (): Promise<boolean> => {
-    if (signOutTombstoneRef.current) return false;
+    if (signOutTombstoneRef.current || recoveryRejectedRef.current) return false;
+    if (isRecoveryQuarantined()) {
+      enterRecoveryQuarantine();
+      return false;
+    }
     const generation = nextGeneration();
     const previous = authRef.current;
     const trustedUserId = previous.user?.id;
@@ -334,12 +547,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         return false;
       }
-      const event = previous.status === 'password_recovery'
-        ? 'PASSWORD_RECOVERY'
-        : 'REVALIDATION';
+      if (previous.status === 'password_recovery') {
+        const binding = recoveryBindingRef.current;
+        if (!binding || binding.userId !== sessionResult.data.session.user.id) {
+          failRecovery(AUTH_MESSAGES.recoveryFailed, generation);
+          return false;
+        }
+        return await acceptRecoverySession({
+          source: binding.source,
+          sequence: binding.eventSequence,
+          session: sessionResult.data.session,
+        }, generation, true);
+      }
       return await verifySession(
         sessionResult.data.session,
-        event,
+        'REVALIDATION',
         generation,
         trustedUserId,
         true,
@@ -359,7 +581,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       attemptFailedSessionCleanup();
       return false;
     }
-  }, [attemptFailedSessionCleanup, isCurrent, nextGeneration, publish, verifySession]);
+  }, [acceptRecoverySession, attemptFailedSessionCleanup, enterRecoveryQuarantine, failRecovery, isCurrent, nextGeneration, publish, verifySession]);
 
   const acceptSdkSignedOut = useCallback(() => {
     const generation = nextGeneration();
@@ -369,6 +591,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     retiredUserIdRef.current = authRef.current.user?.id ?? retiredUserIdRef.current;
     verificationFailureRef.current = false;
     purgeSupabaseAuthStorage();
+    const safeLocalDenial = canSafelyClearRecoveryQuarantineAfterPurge();
+    if (safeLocalDenial) {
+      ignoreQuarantineClearRef.current = true;
+      clearRecoveryQuarantineAfterSafePurge();
+      ignoreQuarantineClearRef.current = false;
+      clearRecovery(true);
+    } else if (!isRecoveryQuarantined()) {
+      clearRecovery(true);
+    }
     publish({
       session: null,
       user: null,
@@ -378,15 +609,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       error: null,
       generation,
     });
-  }, [nextGeneration, publish]);
+    if (!safeLocalDenial && isRecoveryQuarantined()) {
+      setRecoveryStatus('recovery_error');
+      setRecoveryCallbackActive(true);
+      setRecoveryError(AUTH_MESSAGES.signOutWarning);
+    }
+  }, [clearRecovery, nextGeneration, publish]);
 
   useEffect(() => {
     mountedRef.current = true;
     let initialSessionHandled = false;
 
+    const beginRecoveryCallback = async (generation: number) => {
+      setRecoveryCallbackActive(true);
+      setRecoveryStatus('idle');
+      recoveryExchangeInFlightRef.current = true;
+      establishRecoveryQuarantine();
+      const code = getPasswordRecoveryCode();
+      if (!code) {
+        recoveryExchangeInFlightRef.current = false;
+        failRecovery(AUTH_MESSAGES.recoveryFailed, generation);
+        return;
+      }
+      try {
+        const capability = await exchangePasswordRecoveryCodeOnce(code);
+        if (!isCurrent(generation) || signOutTombstoneRef.current) return;
+        if (!capability) {
+          failRecovery(AUTH_MESSAGES.recoveryFailed, generation);
+          return;
+        }
+        cleanPasswordRecoveryUrl();
+        await acceptRecoverySession(capability, generation);
+      } catch {
+        if (isCurrent(generation)) failRecovery(AUTH_MESSAGES.recoveryFailed, generation);
+      } finally {
+        recoveryExchangeInFlightRef.current = false;
+      }
+    };
+
     const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'INITIAL_SESSION') {
         // Bootstrap below owns INITIAL_SESSION so persisted state is always followed by getUser().
+        return;
+      }
+      if (recoveryExchangeInFlightRef.current) {
+        // exchangeCodeForSession owns its synchronous SDK notifications. They
+        // cannot establish application authority independently of its result.
         return;
       }
       if (event === 'SIGNED_OUT') {
@@ -396,11 +664,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         acceptSdkSignedOut();
         return;
       }
+      if (event === 'PASSWORD_RECOVERY') {
+        // Implicit recovery events are not authoritative. Production recovery
+        // capability comes only from the explicit PKCE code exchange below.
+        failRecovery();
+        return;
+      }
       if (event === 'SIGNED_IN'
         || event === 'TOKEN_REFRESHED'
-        || event === 'USER_UPDATED'
-        || event === 'PASSWORD_RECOVERY') {
+        || event === 'USER_UPDATED') {
         if (signOutTombstoneRef.current) return;
+        if (recoveryUpdateInFlightRef.current) return;
+        if (recoveryRejectedRef.current) return;
         if (event === 'SIGNED_IN' && intentionalSignInRef.current) {
           const transition = loginTransitionRef.current;
           if (!transition || transition.generation !== generationRef.current || !session) {
@@ -417,6 +692,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
         if (intentionalSignInRef.current) return;
+        if (isPasswordRecoveryCallbackLocation()
+          && authRef.current.status !== 'password_recovery') {
+          failRecovery();
+          return;
+        }
         verificationFailureRef.current = false;
         if (!session) {
           const generation = nextGeneration();
@@ -431,17 +711,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           });
           return;
         }
-        const verificationEvent = authRef.current.status === 'password_recovery'
-          && authRef.current.user?.id === session.user.id
-          ? 'PASSWORD_RECOVERY'
-          : event;
+        if (authRef.current.status === 'password_recovery') {
+          const binding = recoveryBindingRef.current;
+          if (!binding || authRef.current.user?.id !== session.user.id) {
+            failRecovery();
+            return;
+          }
+          void acceptRecoverySession({
+            source: binding.source,
+            sequence: binding.eventSequence,
+            session,
+          }, undefined, true);
+          return;
+        }
+        const verificationEvent = event;
         const trustedUserId = authRef.current.user?.id;
         if (!trustedUserId && event === 'SIGNED_IN') {
           // Initial persisted sessions are restored only by the bootstrap below.
           // Fresh SIGNED_IN authority is owned exclusively by signIn().
           return;
         }
-        if (!trustedUserId && event !== 'SIGNED_IN' && event !== 'PASSWORD_RECOVERY') {
+        if (!trustedUserId && event !== 'SIGNED_IN') {
           attemptFailedSessionCleanup();
           return;
         }
@@ -460,9 +750,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
 
+    const unsubscribeQuarantine = subscribeRecoveryQuarantine((active) => {
+      if (!mountedRef.current) return;
+      if (active) {
+        if (recoveryExchangeInFlightRef.current) return;
+        enterRecoveryQuarantine();
+        return;
+      }
+      if (ignoreQuarantineClearRef.current) return;
+      // A storage event is only an observation. Marker removal is not proof of
+      // recovery success or safe abandonment, so deny the persisted session and
+      // require a new explicit password login instead of revalidating it.
+      const generation = nextGeneration();
+      signOutTombstoneRef.current = true;
+      verificationFailureRef.current = true;
+      intentionalSignInRef.current = false;
+      loginTransitionRef.current = null;
+      retiredUserIdRef.current = authRef.current.user?.id ?? retiredUserIdRef.current;
+      purgeSupabaseAuthStorage();
+      clearRecovery(true);
+      publish({
+        session: null,
+        user: null,
+        profile: null,
+        loading: false,
+        status: 'unauthenticated',
+        error: AUTH_MESSAGES.sessionError,
+        generation,
+      });
+    });
+
     void (async () => {
       const generation = nextGeneration();
       try {
+        if (isPasswordRecoveryCallbackLocation()) {
+          initialSessionHandled = true;
+          await beginRecoveryCallback(generation);
+          return;
+        }
+
+        if (isRecoveryQuarantined()) {
+          initialSessionHandled = true;
+          enterRecoveryQuarantine();
+          return;
+        }
         const result = await supabase.auth.getSession();
         if (!isCurrent(generation) || signOutTombstoneRef.current) return;
         initialSessionHandled = true;
@@ -482,7 +813,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         await verifySession(result.data.session, 'INITIAL_SESSION', generation, undefined, true);
       } catch {
+        recoveryExchangeInFlightRef.current = false;
         if (!isCurrent(generation)) return;
+        if (isPasswordRecoveryCallbackLocation()) {
+          failRecovery(AUTH_MESSAGES.recoveryFailed, generation);
+          return;
+        }
         verificationFailureRef.current = true;
         publish({
           session: null,
@@ -502,23 +838,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const handleFocus = () => {
       if (!initialSessionHandled) return;
       const status = authRef.current.status;
-      if (status === 'authenticated'
+      if (!recoveryRejectedRef.current && (status === 'authenticated'
         || status === 'account_disabled'
-        || status === 'verification_error') {
+        || status === 'verification_error')) {
         void revalidateAuth();
       }
     };
+    const handlePopState = () => {
+      if (!isPasswordRecoveryCallbackLocation() || recoveryExchangeInFlightRef.current) return;
+      void beginRecoveryCallback(nextGeneration());
+    };
     window.addEventListener('focus', handleFocus);
+    window.addEventListener('popstate', handlePopState);
 
     return () => {
       mountedRef.current = false;
       nextGeneration();
+      recoveryExchangeInFlightRef.current = false;
       window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('popstate', handlePopState);
+      unsubscribeQuarantine();
       subscription.subscription.unsubscribe();
     };
-  }, [acceptSdkSignedOut, attemptFailedSessionCleanup, isCurrent, nextGeneration, publish, revalidateAuth, verifySession]);
+  }, [acceptRecoverySession, acceptSdkSignedOut, attemptFailedSessionCleanup, clearRecovery, enterRecoveryQuarantine, failRecovery, isCurrent, nextGeneration, publish, revalidateAuth, verifySession]);
 
   const signIn = useCallback(async (email: string, password: string) => {
+    if (isRecoveryQuarantined()
+      || recoveryCallbackActive
+      || authRef.current.status === 'password_recovery') {
+      return { error: AUTH_MESSAGES.signInFailed };
+    }
     await signOutInFlightRef.current?.catch(() => undefined);
     const generation = nextGeneration();
     const transitionNonce = loginTransitionNonceRef.current + 1;
@@ -531,6 +880,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
     beginSupabaseAuthPersistence();
     signOutTombstoneRef.current = false;
+    recoveryRejectedRef.current = false;
     intentionalSignInRef.current = true;
     verificationFailureRef.current = false;
     publish({
@@ -649,7 +999,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loginTransitionRef.current = null;
       }
     }
-  }, [isCurrent, nextGeneration, publish, verifySession]);
+  }, [isCurrent, nextGeneration, publish, recoveryCallbackActive, verifySession]);
 
   const signOut = useCallback(async () => {
     const generation = nextGeneration();
@@ -685,7 +1035,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOutInFlightRef.current = null;
     }
 
-    const signOutWarning = remoteFailed || !localPurgeSucceeded
+    const safeLocalDenial = canSafelyClearRecoveryQuarantineAfterPurge();
+    if (safeLocalDenial) {
+      ignoreQuarantineClearRef.current = true;
+      clearRecoveryQuarantineAfterSafePurge();
+      ignoreQuarantineClearRef.current = false;
+      clearRecovery(true);
+    } else if (isRecoveryQuarantined()) {
+      setRecoveryStatus('recovery_error');
+      setRecoveryCallbackActive(true);
+      setRecoveryError(AUTH_MESSAGES.signOutWarning);
+    }
+
+    const signOutWarning = remoteFailed || !localPurgeSucceeded || !safeLocalDenial
       ? AUTH_MESSAGES.signOutWarning
       : null;
     if (signOutWarning) {
@@ -695,12 +1057,122 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     explicitSignOutRef.current = false;
     return { error: signOutWarning };
-  }, [isCurrent, nextGeneration, publish]);
+  }, [clearRecovery, isCurrent, nextGeneration, publish]);
 
   const resetPassword = useCallback(async (email: string) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
-    return { error: error ? AUTH_MESSAGES.passwordResetFailed : null };
+    setRecoveryStatus('requesting_reset');
+    setRecoveryError(null);
+    try {
+      const redirectTo = getPasswordRecoveryRedirectUrl();
+      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+      if (error) {
+        setRecoveryStatus('recovery_error');
+        setRecoveryError(AUTH_MESSAGES.passwordResetFailed);
+        return { error: AUTH_MESSAGES.passwordResetFailed };
+      }
+      setRecoveryStatus('reset_email_sent');
+      return { error: null };
+    } catch {
+      setRecoveryStatus('recovery_error');
+      setRecoveryError(AUTH_MESSAGES.passwordResetFailed);
+      return { error: AUTH_MESSAGES.passwordResetFailed };
+    }
   }, []);
+
+  const updateRecoveryPassword = useCallback(async (password: string) => {
+    const binding = recoveryBindingRef.current;
+    if (password.length < MINIMUM_PASSWORD_LENGTH
+      || recoveryUpdateInFlightRef.current
+      || !binding
+      || binding.source !== 'PKCE_CODE_EXCHANGE'
+      || authRef.current.status !== 'password_recovery'
+      || generationRef.current !== binding.generation
+      || authRef.current.user?.id !== binding.userId
+      || authRef.current.session?.access_token !== binding.accessToken
+      || getSupabaseAuthStorageRevision() !== binding.storageRevision) {
+      return { error: AUTH_MESSAGES.passwordUpdateFailed };
+    }
+
+    recoveryUpdateInFlightRef.current = true;
+    setRecoveryStatus('updating_password');
+    setRecoveryError(null);
+    try {
+      const beforeSession = await supabase.auth.getSession();
+      const beforeUser = await supabase.auth.getUser();
+      const beforeClaims = beforeSession.data.session
+        ? getPurplelokSessionClaims(beforeSession.data.session)
+        : null;
+      if (!beforeSession.data.session
+        || beforeSession.error
+        || beforeUser.error
+        || !beforeUser.data.user
+        || beforeSession.data.session.user.id !== binding.userId
+        || beforeUser.data.user.id !== binding.userId
+        || beforeSession.data.session.access_token !== binding.accessToken
+        || !beforeClaims?.sessionIdExists
+        || beforeClaims.sessionState !== 'recovery_pending_v1'
+        || generationRef.current !== binding.generation
+        || getSupabaseAuthStorageRevision() !== binding.storageRevision) {
+        throw new Error('RECOVERY_CONTINUITY_FAILED');
+      }
+
+      const updated = await supabase.auth.updateUser({ password });
+      if (updated.error || !updated.data.user || updated.data.user.id !== binding.userId) {
+        throw new Error('PASSWORD_UPDATE_FAILED');
+      }
+
+      const finalSessionResult = await supabase.auth.getSession();
+      const finalUserResult = await supabase.auth.getUser();
+      const finalSession = finalSessionResult.data.session;
+      const finalClaims = finalSession ? getPurplelokSessionClaims(finalSession) : null;
+      if (finalSessionResult.error
+        || !finalSession
+        || finalUserResult.error
+        || !finalUserResult.data.user
+        || finalSession.user.id !== binding.userId
+        || finalUserResult.data.user.id !== binding.userId
+        || finalSession.access_token !== binding.accessToken
+        || !finalClaims?.sessionIdExists
+        || finalClaims.sessionState !== 'recovery_pending_v1'
+        || generationRef.current !== binding.generation) {
+        throw new Error('RECOVERY_CONTINUITY_FAILED');
+      }
+
+      retiredRecoveryAccessTokenRef.current = binding.accessToken;
+      recoveryBindingRef.current = null;
+      explicitSignOutRef.current = true;
+      signOutTombstoneRef.current = true;
+      const signedOut = await supabase.auth.signOut({ scope: 'local' });
+      if (signedOut.error || !purgeSupabaseAuthStorage()) {
+        throw new Error('RECOVERY_SIGN_OUT_FAILED');
+      }
+      ignoreQuarantineClearRef.current = true;
+      const quarantineCleared = clearRecoveryQuarantineAfterVerifiedRecovery();
+      ignoreQuarantineClearRef.current = false;
+      if (!quarantineCleared) throw new Error('RECOVERY_QUARANTINE_CLEAR_FAILED');
+      const signedOutGeneration = nextGeneration();
+      publish({
+        session: null,
+        user: null,
+        profile: null,
+        loading: false,
+        status: 'unauthenticated',
+        error: null,
+        generation: signedOutGeneration,
+      });
+      cleanPasswordRecoveryUrl(true);
+      setRecoveryCallbackActive(false);
+      setRecoveryError(null);
+      setRecoveryStatus('password_updated');
+      return { error: null };
+    } catch {
+      failRecovery(AUTH_MESSAGES.passwordUpdateFailed);
+      return { error: AUTH_MESSAGES.passwordUpdateFailed };
+    } finally {
+      explicitSignOutRef.current = false;
+      recoveryUpdateInFlightRef.current = false;
+    }
+  }, [failRecovery, nextGeneration, publish]);
 
   const refreshProfile = useCallback(async () => {
     await revalidateAuth();
@@ -709,9 +1181,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider value={{
       ...auth,
+      recoveryStatus,
+      recoveryCallbackActive,
+      recoveryCanUpdate: recoveryBindingRef.current !== null,
+      recoveryError,
       signIn,
       signOut,
       resetPassword,
+      updateRecoveryPassword,
       refreshProfile,
       revalidateAuth,
     }}>

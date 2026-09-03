@@ -99,7 +99,7 @@ describe('Batch 5E-B1 internal auth containment', () => {
     await waitFor(() => {
       expect(auth.resetPassword).toHaveBeenCalledWith('employee@purplelok.com');
     });
-    expect(screen.getByText(/password reset link sent/i)).toBeTruthy();
+    expect(screen.getByText(/if an account exists.*reset link has been sent/i)).toBeTruthy();
     expect(auth.signIn).not.toHaveBeenCalled();
   });
 

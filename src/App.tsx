@@ -5,6 +5,7 @@ import { TenantDataProvider } from '@/context/TenantDataContext';
 import { ToastProvider } from '@/components/ui/Toast';
 import { Button } from '@/components/ui/Button';
 import { AuthScreen } from '@/components/auth/AuthScreen';
+import { PasswordRecoveryScreen } from '@/components/auth/PasswordRecoveryScreen';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
 import { Dashboard } from '@/pages/Dashboard';
@@ -29,6 +30,7 @@ function AppContent() {
     session,
     loading,
     status: authStatus,
+    recoveryCallbackActive,
     revalidateAuth,
     signOut,
   } = useAuth();
@@ -60,6 +62,10 @@ function AppContent() {
     );
   }
 
+  if (authStatus === 'password_recovery' || recoveryCallbackActive) {
+    return <PasswordRecoveryScreen />;
+  }
+
   if (authStatus === 'verification_error') {
     return (
       <AuthAccessState
@@ -76,16 +82,6 @@ function AppContent() {
       <AuthAccessState
         title="Account disabled"
         message="Your PURPLELOK profile is inactive. Contact an administrator for access."
-        onSignOut={() => void signOut()}
-      />
-    );
-  }
-
-  if (authStatus === 'password_recovery') {
-    return (
-      <AuthAccessState
-        title="Password recovery"
-        message="Password recovery is in progress. CRM access remains locked until the recovery flow is completed."
         onSignOut={() => void signOut()}
       />
     );

@@ -10,6 +10,11 @@ type AuthCallback = (event: AuthChangeEvent, session: Session | null) => void;
 const dependencies = vi.hoisted(() => ({ client: null as FakeSupabase | null }));
 
 vi.mock('@/lib/supabase', () => ({
+  exchangePasswordRecoveryCodeOnce: async () => null,
+  claimPasswordRecoveryEvent: (event: AuthChangeEvent, session: Session | null) =>
+    dependencies.client!.claimRecovery(event, session),
+  consumeBufferedPasswordRecoveryEvent: () => dependencies.client!.consumeRecovery(),
+  clearPasswordRecoveryEventProvenance: () => dependencies.client?.clearRecoveryProvenance(),
   supabase: {
     auth: {
       getSession: () => dependencies.client!.getSession(),
@@ -26,8 +31,17 @@ vi.mock('@/lib/supabase', () => ({
 
 vi.mock('@/lib/supabase-auth-storage', () => ({
   beginSupabaseAuthPersistence: () => dependencies.client!.beginAuthPersistence(),
+  canSafelyClearRecoveryQuarantineAfterPurge: () => dependencies.client!.storageBlocked,
+  clearRecoveryQuarantineAfterSafePurge: () => dependencies.client!.storageBlocked
+    && dependencies.client!.setRecoveryQuarantine(false),
+  clearRecoveryQuarantineAfterVerifiedRecovery: () =>
+    dependencies.client!.setRecoveryQuarantine(false),
+  establishRecoveryQuarantine: () => dependencies.client!.setRecoveryQuarantine(true),
   getSupabaseAuthStorageRevision: () => dependencies.client!.storageRevision,
+  isRecoveryQuarantined: () => dependencies.client!.recoveryQuarantined,
   purgeSupabaseAuthStorage: () => dependencies.client!.purgeAuthStorage(),
+  subscribeRecoveryQuarantine: (listener: (active: boolean) => void) =>
+    dependencies.client!.subscribeRecoveryQuarantine(listener),
   withPurgedSupabaseAuthSession: (operation: () => Promise<unknown>) => operation(),
 }));
 
@@ -48,8 +62,25 @@ function authUser(id: string): User {
   return { id, email: `${id}@example.test` } as User;
 }
 
-function authSession(id: string, token = `${id}-token`): Session {
-  return { access_token: token, user: authUser(id) } as Session;
+function authSession(
+  id: string,
+  token = `${id}-token`,
+  sessionState = 'normal_v1',
+): Session {
+  const encode = (value: unknown) => btoa(JSON.stringify(value))
+    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const accessToken = [
+    encode({ alg: 'none', typ: 'JWT' }),
+    encode({
+      sub: id,
+      session_id: id === 'user-b'
+        ? '00000000-0000-4000-8000-000000000002'
+        : '00000000-0000-4000-8000-000000000001',
+      purplelok_session_state: sessionState,
+    }),
+    encode(token),
+  ].join('.');
+  return { access_token: accessToken, user: authUser(id) } as Session;
 }
 
 function userProfile(
@@ -109,8 +140,12 @@ class FakeSupabase {
     (userId) => ({ data: [userProfile(userId)], error: null });
   getSessionHandler: (() => Promise<Result<{ session: Session | null }>>) | null = null;
   getUserHandler: (() => Promise<Result<{ user: User | null }>>) | null = null;
-  callback: AuthCallback | null = null;
+  callbacks: AuthCallback[] = [];
   readonly calls: string[] = [];
+  recoveryQuarantined = false;
+  recoverySequence = 0;
+  pendingRecovery: { source: 'PASSWORD_RECOVERY'; sequence: number; session: Session } | null = null;
+  quarantineListeners: Array<(active: boolean) => void> = [];
 
   getSession() {
     this.calls.push('getSession');
@@ -128,8 +163,16 @@ class FakeSupabase {
   }
 
   onAuthStateChange(callback: AuthCallback) {
-    this.callback = callback;
-    return { data: { subscription: { unsubscribe: vi.fn() } } };
+    this.callbacks.push(callback);
+    return {
+      data: {
+        subscription: {
+          unsubscribe: vi.fn(() => {
+            this.callbacks = this.callbacks.filter((candidate) => candidate !== callback);
+          }),
+        },
+      },
+    };
   }
 
   signInWithPassword(_credentials: { email: string; password: string }) {
@@ -145,7 +188,7 @@ class FakeSupabase {
     if (this.signInEventSession !== undefined) {
       const eventSession = this.signInEventSession;
       this.signInEventSession = undefined;
-      this.callback?.('SIGNED_IN', eventSession);
+      for (const callback of [...this.callbacks]) callback('SIGNED_IN', eventSession);
     }
     return Promise.resolve({ data: { session: this.currentSession }, error: null });
   }
@@ -184,7 +227,45 @@ class FakeSupabase {
     this.currentSession = session;
     this.liveUser = session?.user ?? null;
     this.storageRevision += 1;
-    this.callback?.(event, session);
+    if (event === 'PASSWORD_RECOVERY' && session) {
+      this.setRecoveryQuarantine(true);
+      this.recoverySequence += 1;
+      this.pendingRecovery = { source: 'PASSWORD_RECOVERY', sequence: this.recoverySequence, session };
+    } else if (event === 'SIGNED_OUT') {
+      this.pendingRecovery = null;
+    }
+    for (const callback of [...this.callbacks]) callback(event, session);
+  }
+
+  claimRecovery(event: AuthChangeEvent, session: Session | null) {
+    if (event !== 'PASSWORD_RECOVERY' || !session || !this.pendingRecovery) return null;
+    if (this.pendingRecovery.session.user.id !== session.user.id
+      || this.pendingRecovery.session.access_token !== session.access_token) return null;
+    const capability = this.pendingRecovery;
+    this.pendingRecovery = null;
+    return capability;
+  }
+
+  consumeRecovery() {
+    const capability = this.pendingRecovery;
+    this.pendingRecovery = null;
+    return capability;
+  }
+
+  clearRecoveryProvenance() { this.pendingRecovery = null; }
+
+  setRecoveryQuarantine(active: boolean) {
+    const changed = this.recoveryQuarantined !== active;
+    this.recoveryQuarantined = active;
+    if (changed) for (const listener of [...this.quarantineListeners]) listener(active);
+    return true;
+  }
+
+  subscribeRecoveryQuarantine(listener: (active: boolean) => void) {
+    this.quarantineListeners.push(listener);
+    return () => {
+      this.quarantineListeners = this.quarantineListeners.filter((candidate) => candidate !== listener);
+    };
   }
 
   replaceStoredSession(session: Session | null) {
@@ -223,6 +304,7 @@ async function expectStatus(status: string) {
 }
 
 beforeEach(() => {
+  window.history.replaceState({}, '', '/');
   dependencies.client = new FakeSupabase();
   observed = null;
 });
@@ -461,17 +543,18 @@ describe('Batch 5E-B2 sign-out and auth events', () => {
     act(() => dependencies.client!.emit('TOKEN_REFRESHED', authSession('user-a', 'refreshed-token')));
     await expectStatus('authenticated');
     expect(dependencies.client!.calls.filter((call) => call === 'getUser').length).toBe(priorGetUserCalls + 1);
-    expect(observed?.session?.access_token).toBe('refreshed-token');
+    expect(observed?.session?.access_token).toBe(authSession('user-a', 'refreshed-token').access_token);
   });
 
-  it('PASSWORD_RECOVERY is distinguishable and cannot enable CRM authority', async () => {
+  it('implicit PASSWORD_RECOVERY is rejected and cannot enable CRM authority', async () => {
     renderAuth();
     await expectStatus('authenticated');
+    window.history.replaceState({}, '', '/auth/recovery#access_token=recovery-token&type=recovery');
     act(() => dependencies.client!.emit('PASSWORD_RECOVERY', authSession('user-a', 'recovery-token')));
-    await expectStatus('password_recovery');
+    await expectStatus('verification_error');
     expect(screen.getByTestId('downstream').textContent).toBe('blocked');
     act(() => dependencies.client!.emit('TOKEN_REFRESHED', authSession('user-a', 'recovery-refreshed-token')));
-    await expectStatus('password_recovery');
+    await expectStatus('verification_error');
     expect(screen.getByTestId('downstream').textContent).toBe('blocked');
   });
 
@@ -605,7 +688,7 @@ describe('Batch 5E-B2R identity continuity and logout epoch', () => {
       expect(await observed!.signIn('user-a@example.test', 'password')).toEqual({ error: null });
     });
     await expectStatus('authenticated');
-    expect(observed?.session?.access_token).toBe('explicit-a-token');
+    expect(observed?.session?.access_token).toBe(authSession('user-a', 'explicit-a-token').access_token);
   });
 
   it('fails explicit sign-in when the observed SIGNED_IN identity differs from its result', async () => {
@@ -680,7 +763,7 @@ describe('Batch 5E-B2R identity continuity and logout epoch', () => {
     dependencies.client!.nextSignInSession = authSession('user-a', 'fresh-a-token');
     await act(async () => { await observed!.signIn('user-a@example.test', 'password'); });
     await expectStatus('authenticated');
-    expect(observed?.session?.access_token).toBe('fresh-a-token');
+    expect(observed?.session?.access_token).toBe(authSession('user-a', 'fresh-a-token').access_token);
   });
 
   it('ignores an old A event after an explicit B login', async () => {

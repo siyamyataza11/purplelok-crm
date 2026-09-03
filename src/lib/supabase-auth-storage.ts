@@ -13,6 +13,114 @@ import type { SupportedStorage } from '@supabase/supabase-js';
 const TOMBSTONE_SUFFIX = '.purplelok-signed-out';
 const TOMBSTONE_VALUE = 'signed-out-v1';
 const INVALID_SESSION_SENTINEL = '{"purplelok_signed_out":true}';
+const RECOVERY_QUARANTINE_KEY = 'purplelok.auth.recovery-quarantine';
+const RECOVERY_QUARANTINE_VALUE = '{"version":"recovery-quarantine-v1"}';
+const RECOVERY_QUARANTINE_EVENT = 'purplelok:recovery-quarantine';
+
+let memoryRecoveryQuarantine = false;
+
+function browserStorage(): Storage | null {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function notifyRecoveryQuarantine(active: boolean): void {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+  window.dispatchEvent(new CustomEvent(RECOVERY_QUARANTINE_EVENT, { detail: { active } }));
+}
+
+/**
+ * Establishes a credential-free durable denial marker. This marker never
+ * confers password-reset capability; it only prevents a persisted Auth session
+ * from becoming ordinary application authority.
+ */
+export function establishRecoveryQuarantine(): boolean {
+  const wasActive = isRecoveryQuarantined();
+  memoryRecoveryQuarantine = true;
+  const storage = browserStorage();
+  if (!storage) {
+    if (!wasActive) notifyRecoveryQuarantine(true);
+    return false;
+  }
+  try {
+    storage.setItem(RECOVERY_QUARANTINE_KEY, RECOVERY_QUARANTINE_VALUE);
+    const written = storage.getItem(RECOVERY_QUARANTINE_KEY) === RECOVERY_QUARANTINE_VALUE;
+    if (!wasActive) notifyRecoveryQuarantine(true);
+    return written;
+  } catch {
+    if (!wasActive) notifyRecoveryQuarantine(true);
+    return false;
+  }
+}
+
+export function isRecoveryQuarantined(): boolean {
+  const storage = browserStorage();
+  if (!storage) {
+    // In a browser, inability to obtain localStorage makes the durable state
+    // unknowable. Only non-browser execution may safely rely on memory alone.
+    return typeof window === 'undefined' ? memoryRecoveryQuarantine : true;
+  }
+  try {
+    // Any value at the reserved marker key denies authority. Unknown/corrupt
+    // marker versions therefore fail closed rather than reopening the CRM.
+    return storage.getItem(RECOVERY_QUARANTINE_KEY) !== null
+      || memoryRecoveryQuarantine;
+  } catch {
+    // Storage read failure is ambiguous and must never reopen ordinary auth.
+    return true;
+  }
+}
+
+function clearRecoveryQuarantineMarker(): boolean {
+  const storage = browserStorage();
+  if (storage) {
+    try {
+      storage.removeItem(RECOVERY_QUARANTINE_KEY);
+      if (storage.getItem(RECOVERY_QUARANTINE_KEY) !== null) return false;
+    } catch {
+      return false;
+    }
+  }
+  memoryRecoveryQuarantine = false;
+  notifyRecoveryQuarantine(false);
+  return true;
+}
+
+/**
+ * Completes the local success transition after AuthContext has independently
+ * verified password mutation, live identity, token continuity, and generation.
+ * Observers of the resulting storage removal must still fail closed; the
+ * removal notification is not success authority for another tab.
+ */
+export function clearRecoveryQuarantineAfterVerifiedRecovery(): boolean {
+  return clearRecoveryQuarantineMarker();
+}
+
+export function subscribeRecoveryQuarantine(
+  listener: (active: boolean) => void,
+): () => void {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+    return () => undefined;
+  }
+  const handleLocal = (event: Event) => {
+    const detail = (event as CustomEvent<{ active?: boolean }>).detail;
+    listener(detail?.active === true);
+  };
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key !== RECOVERY_QUARANTINE_KEY) return;
+    memoryRecoveryQuarantine = event.newValue !== null;
+    listener(memoryRecoveryQuarantine);
+  };
+  window.addEventListener(RECOVERY_QUARANTINE_EVENT, handleLocal);
+  window.addEventListener('storage', handleStorage);
+  return () => {
+    window.removeEventListener(RECOVERY_QUARANTINE_EVENT, handleLocal);
+    window.removeEventListener('storage', handleStorage);
+  };
+}
 
 export class ControlledSupabaseAuthStorage implements SupportedStorage {
   private readonly knownKeys = new Set<string>();
@@ -24,11 +132,7 @@ export class ControlledSupabaseAuthStorage implements SupportedStorage {
   private revision = 0;
 
   private backingStorage(): Storage | null {
-    try {
-      return typeof window === 'undefined' ? null : window.localStorage;
-    } catch {
-      return null;
-    }
+    return browserStorage();
   }
 
   private tombstoneKey(key: string): string {
@@ -205,6 +309,26 @@ export class ControlledSupabaseAuthStorage implements SupportedStorage {
   getRevision(): number {
     return this.revision;
   }
+
+  canSafelyClearRecoveryQuarantine(): boolean {
+    if (!this.tombstoned) return false;
+    const storage = this.backingStorage();
+    if (!storage) return this.knownKeys.size === 0;
+    for (const key of this.knownKeys) {
+      try {
+        const value = storage.getItem(key);
+        if (value === null
+          || value === INVALID_SESSION_SENTINEL
+          || storage.getItem(this.tombstoneKey(key)) === TOMBSTONE_VALUE) {
+          continue;
+        }
+      } catch {
+        return false;
+      }
+      return false;
+    }
+    return true;
+  }
 }
 
 export const supabaseAuthStorage = new ControlledSupabaseAuthStorage();
@@ -225,4 +349,18 @@ export function beginSupabaseAuthPersistence(): void {
 
 export function getSupabaseAuthStorageRevision(): number {
   return supabaseAuthStorage.getRevision();
+}
+
+export function canSafelyClearRecoveryQuarantineAfterPurge(): boolean {
+  return supabaseAuthStorage.canSafelyClearRecoveryQuarantine();
+}
+
+/**
+ * Clears recovery flow-control state only after the adapter proves that local
+ * recovery credentials are absent or durably denied. This operation cannot
+ * turn a session into application authority.
+ */
+export function clearRecoveryQuarantineAfterSafePurge(): boolean {
+  if (!supabaseAuthStorage.canSafelyClearRecoveryQuarantine()) return false;
+  return clearRecoveryQuarantineMarker();
 }

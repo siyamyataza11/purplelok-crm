@@ -3,11 +3,20 @@ import { useAuth } from '@/context/AuthContext';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Lock, Mail, ArrowRight, Shield, Sparkles, CheckCircle2 } from 'lucide-react';
+import {
+  PASSWORD_RESET_REQUEST_CONFIRMATION,
+  PASSWORD_UPDATED_CONFIRMATION,
+} from '@/lib/auth-errors';
 
 type Mode = 'login' | 'forgot';
 
 export function AuthScreen() {
-  const { signIn, resetPassword, error: authError } = useAuth();
+  const {
+    signIn,
+    resetPassword,
+    error: authError,
+    recoveryStatus,
+  } = useAuth();
   const [mode, setMode] = useState<Mode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -27,7 +36,7 @@ export function AuthScreen() {
       } else {
         const { error } = await resetPassword(email);
         if (error) setError(error);
-        else setInfo('Password reset link sent. Check your email.');
+        else setInfo(PASSWORD_RESET_REQUEST_CONFIRMATION);
       }
     } finally {
       setLoading(false);
@@ -71,7 +80,11 @@ export function AuthScreen() {
             <Input id="auth-email" label="Email" type="email" placeholder="you@purplelok.com" value={email} onChange={(e) => setEmail(e.target.value)} icon={<Mail size={15} />} required />
             {mode !== 'forgot' && <Input id="auth-password" label="Password" type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} icon={<Lock size={15} />} required />}
             {(error || authError) && <div className="text-sm text-danger bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error ?? authError}</div>}
-            {info && <div className="text-sm text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2">{info}</div>}
+            {(info || recoveryStatus === 'password_updated') && (
+              <div className="text-sm text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2">
+                {info ?? PASSWORD_UPDATED_CONFIRMATION}
+              </div>
+            )}
             {mode === 'login' && (
               <div className="flex items-center justify-end text-sm">
                 <button type="button" onClick={() => setMode('forgot')} className="text-secondary hover:text-purple-700 transition-colors">Forgot password?</button>
