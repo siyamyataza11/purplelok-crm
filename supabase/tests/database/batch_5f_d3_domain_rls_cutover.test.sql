@@ -2,7 +2,7 @@ BEGIN;
 
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 
-SELECT plan(117);
+SELECT plan(120);
 
 CREATE TEMP TABLE batch_5f_d3_expected_policies (
   table_name text NOT NULL,
@@ -315,6 +315,27 @@ JOIN (VALUES
 JOIN public.organization_roles AS role ON role.organization_id=membership.organization_id
   AND role.key=assignment.role_key;
 
+-- D2 intentionally does not grant projects.write to the canonical Staff role.
+-- Add a transaction-local custom role so this actor isolates projects.write
+-- from projects.manage without changing the frozen system-role matrix.
+INSERT INTO public.organization_roles
+  (id,organization_id,name,key,is_system)
+VALUES
+  ('00000000-0000-0000-0000-0000000d3520',
+   current_setting('batch_5f_d3.org_a')::uuid,
+   'D3 Project Writer','d3_project_writer',false);
+INSERT INTO public.organization_role_permissions
+  (organization_id,organization_role_id,permission_key)
+VALUES
+  (current_setting('batch_5f_d3.org_a')::uuid,
+   '00000000-0000-0000-0000-0000000d3520','projects.write');
+INSERT INTO public.organization_member_roles
+  (organization_id,organization_member_id,organization_role_id)
+VALUES
+  (current_setting('batch_5f_d3.org_a')::uuid,
+   '00000000-0000-0000-0000-0000000d3505',
+   '00000000-0000-0000-0000-0000000d3520');
+
 ALTER TABLE public.organization_member_roles DISABLE TRIGGER organization_member_roles_reject_client;
 INSERT INTO public.organization_member_roles (organization_id,organization_member_id,organization_role_id)
 SELECT membership.organization_id,membership.id,role.id
@@ -438,6 +459,12 @@ RESET ROLE;
 
 SELECT pg_temp.batch_5f_d3_set_actor('00000000-0000-0000-0000-0000000d3305','00000000-0000-0000-0000-0000000d3405');
 SET LOCAL ROLE authenticated;
+SELECT ok(private.purplelok_has_permission(
+  current_setting('batch_5f_d3.org_a')::uuid,'projects.write'),
+  'synthetic Staff actor has the intended projects.write capability');
+SELECT ok(NOT private.purplelok_has_permission(
+  current_setting('batch_5f_d3.org_a')::uuid,'projects.manage'),
+  'synthetic Staff actor does not have projects.manage');
 UPDATE public.projects SET progress=25,assigned_to=assigned_to
 WHERE id='00000000-0000-0000-0000-0000000d3631';
 SELECT is((SELECT progress FROM public.projects WHERE id='00000000-0000-0000-0000-0000000d3631'),25,'Staff projects.write may update ordinary progress');
@@ -466,6 +493,17 @@ SELECT is((SELECT count(*)::integer FROM public.quotes),0,'Staff without quotes.
 SELECT throws_ok($$INSERT INTO public.channels (organization_id,name,created_by)
  VALUES (current_setting('batch_5f_d3.org_a')::uuid,'Staff forged channel','00000000-0000-0000-0000-0000000d3305')$$,
  '42501',NULL::text,'collaboration.write does not grant channel management');
+RESET ROLE;
+
+SELECT pg_temp.batch_5f_d3_set_actor('00000000-0000-0000-0000-0000000d3304','00000000-0000-0000-0000-0000000d3404');
+SET LOCAL ROLE authenticated;
+UPDATE public.projects
+SET assigned_to=ARRAY['00000000-0000-0000-0000-0000000d3301']::uuid[],
+    health='at_risk',status='review'
+WHERE id='00000000-0000-0000-0000-0000000d3631';
+SELECT is((SELECT status||'|'||health||'|'||pg_catalog.cardinality(assigned_to)::text
+  FROM public.projects WHERE id='00000000-0000-0000-0000-0000000d3631'),
+  'review|at_risk|1','projects.manage permits assignment, health, and status changes');
 RESET ROLE;
 
 SELECT pg_temp.batch_5f_d3_set_actor('00000000-0000-0000-0000-0000000d3311','00000000-0000-0000-0000-0000000d3411');
