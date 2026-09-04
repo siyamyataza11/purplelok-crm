@@ -641,51 +641,37 @@ test('Demo cannot read a PURPLELOK lead even when permissive RLS returns it', as
   await assert.rejects(() => api.table('leads').select(), TenantDataIntegrityError);
 });
 
-test('cross-tenant lead drag fails closed and creates no activity', async () => {
-  const database = new FakeDatabase();
-  database.enqueue([]);
-  const api = createTenantDataApi(database, new TenantRequestScope('purplelok'));
+test('lead drag propagates protected workflow denial without a fallback write', async () => {
+  let calls = 0;
   await assert.rejects(() => moveLeadWithActivity({
-    tenant: api,
     canWrite: true,
     leadId: 'demo-lead',
-    companyName: 'Demo lead',
     stage: 'contacted',
-    userId: 'real-owner',
+    changeStage: async () => { calls += 1; throw new TenantDataIntegrityError('denied'); },
   }), TenantDataIntegrityError);
-  assert.deepEqual(database.builders.map(({ source }) => source), ['table:leads']);
+  assert.equal(calls, 1);
 });
 
-test('successful lead drag writes tenant-owned activity only after exact update', async () => {
-  const database = new FakeDatabase();
-  database.enqueue([{ id: 'lead-a', organization_id: 'org-a' }]);
-  database.enqueue(null);
-  const api = createTenantDataApi(database, new TenantRequestScope('org-a'));
+test('successful lead drag delegates one atomic stage workflow', async () => {
+  const calls: unknown[][] = [];
   await moveLeadWithActivity({
-    tenant: api,
     canWrite: true,
     leadId: 'lead-a',
-    companyName: 'Scoped lead',
     stage: 'won',
-    userId: 'user-a',
+    changeStage: async (...args) => { calls.push(args); },
   });
-  assert.deepEqual(database.builders.map(({ source }) => source), ['table:leads', 'table:activities']);
-  const insert = database.builders[1].builder.operations.find(({ method }) => method === 'insert');
-  assert.equal((insert?.args[0] as Array<Record<string, unknown>>)[0].organization_id, 'org-a');
+  assert.deepEqual(calls, [['lead-a', 'won']]);
 });
 
 test('lead drag requires leads.write before any query', async () => {
-  const database = new FakeDatabase();
-  const api = createTenantDataApi(database, new TenantRequestScope('org-a'));
+  let called = false;
   await assert.rejects(() => moveLeadWithActivity({
-    tenant: api,
     canWrite: false,
     leadId: 'lead-a',
-    companyName: 'Lead',
     stage: 'won',
-    userId: 'user-a',
+    changeStage: async () => { called = true; },
   }), /Lead write permission/);
-  assert.equal(database.builders.length, 0);
+  assert.equal(called, false);
 });
 
 test('all migrated create targets inject a non-null active tenant', async () => {

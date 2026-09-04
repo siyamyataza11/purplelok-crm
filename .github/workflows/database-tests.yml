@@ -10,12 +10,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: batch-5f-d3-database-validation-${{ github.ref }}
+  group: batch-5f-d4-database-validation-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   database-tests:
-    name: Batch 5F-D3 isolated validation
+    name: Batch 5F-D4 isolated validation
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -242,6 +242,15 @@ jobs:
           set -euo pipefail
           cp "${{ steps.migrations.outputs.store }}/20260904120000_batch_5f_d3_domain_rls_cutover.sql" supabase/migrations/
           supabase migration up --local
+          supabase test db --local supabase/tests/database/batch_5f_d3_domain_rls_cutover.test.sql
+
+      - name: Apply and test Batch 5F-D4 protected workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ steps.migrations.outputs.store }}/20260904180000_batch_5f_d4_protected_workflows.sql" supabase/migrations/
+          supabase migration up --local
+          supabase test db --local supabase/tests/database/batch_5f_d4_protected_workflows.test.sql
           supabase test db --local supabase/tests/database/batch_5f_d3_domain_rls_cutover.test.sql
 
       - name: Validate frontend and scripts under Node 22

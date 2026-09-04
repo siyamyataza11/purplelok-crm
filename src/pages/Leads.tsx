@@ -13,6 +13,7 @@ import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
 import { runTenantLoader } from '@/lib/tenant-loaders';
 import { useOrganization } from '@/context/OrganizationContext';
+import { protectedWorkflows } from '@/lib/protected-workflows';
 
 const STAGES: { id: LeadStage; label: string; color: string; accent: string }[] = [
   { id: 'new_lead', label: 'New Lead', color: 'border-l-blue-500', accent: 'text-blue-600' },
@@ -24,7 +25,6 @@ const STAGES: { id: LeadStage; label: string; color: string; accent: string }[] 
 ];
 
 export function LeadsPage() {
-  const { profile } = useAuth();
   const tenant = useTenantData();
   const { hasPermission } = useOrganization();
   const { add } = useToast();
@@ -62,12 +62,10 @@ export function LeadsPage() {
     const lead = leads.find((l) => l.id === draggedId);
     if (!lead || lead.stage === stage) { setDraggedId(null); setDragOverStage(null); return; }
     await moveLeadWithActivity({
-      tenant,
       canWrite: hasPermission(ACTION_PERMISSIONS.leadsWrite),
       leadId: draggedId,
-      companyName: lead.company_name,
       stage,
-      userId: profile?.id ?? null,
+      changeStage: protectedWorkflows.changeLeadStage,
     });
     setLeads((prev) => prev.map((l) => (l.id === draggedId ? { ...l, stage } : l)));
     add('success', `Lead moved to ${stage.replace('_', ' ')}`);
@@ -178,7 +176,7 @@ function LeadModal({ open, onClose, onSaved }: { open: boolean; onClose: () => v
     try {
       if (!hasPermission(ACTION_PERMISSIONS.leadsWrite)) throw new Error('Lead write permission is required');
       if (profile?.id) await tenant.members.assertActive(profile.id);
-      const [lead] = await tenant.table('leads').insert({
+      await tenant.table('leads').insert({
         company_name: form.company_name,
         contact_name: form.contact_name,
         email: form.email,
@@ -191,14 +189,6 @@ function LeadModal({ open, onClose, onSaved }: { open: boolean; onClose: () => v
         notes: form.notes,
         assigned_to: profile?.id ?? null,
       }, { returning: 'id' });
-      await tenant.table('activities').insert({
-        user_id: profile?.id ?? null,
-        type: 'lead_created',
-        entity: 'lead',
-        entity_id: lead.id,
-        description: `created lead "${form.company_name}"`,
-        metadata: null,
-      });
       add('success', 'Lead created');
       onSaved();
     } catch (err) {

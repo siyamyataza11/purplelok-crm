@@ -15,12 +15,13 @@ import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
 import { runTenantLoader } from '@/lib/tenant-loaders';
 import { useOrganization } from '@/context/OrganizationContext';
+import { protectedWorkflows } from '@/lib/protected-workflows';
 
 type View = 'list' | 'detail' | 'create';
 
 export function InvoicesPage() {
   const { add } = useToast();
-  const { hasPermission, hasAllPermissions } = useOrganization();
+  const { hasPermission } = useOrganization();
   const tenant = useTenantData();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -71,20 +72,8 @@ export function InvoicesPage() {
   const totalOverdue = invoices.filter((i) => i.status === 'overdue').reduce((s, i) => s + i.balance, 0);
 
   async function recordPayment(inv: Invoice, amount: number, method: string, reference: string) {
-    if (!hasAllPermissions([ACTION_PERMISSIONS.paymentsRecord, ACTION_PERMISSIONS.invoicesWrite])) return;
-    await tenant.assertTenantRecord('invoices', inv.id);
-    await tenant.assertTenantRecord('clients', inv.client_id);
-    await tenant.table('payments').insert({
-      invoice_id: inv.id,
-      client_id: inv.client_id,
-      amount,
-      method,
-      reference,
-    });
-    const newPaid = inv.amount_paid + amount;
-    const newBalance = inv.total - newPaid;
-    const newStatus = newBalance <= 0 ? 'paid' : 'partial';
-    await tenant.table('invoices').updateById(inv.id, { amount_paid: newPaid, balance: newBalance, status: newStatus });
+    if (!hasPermission(ACTION_PERMISSIONS.paymentsRecord)) return;
+    await protectedWorkflows.recordPayment(inv.id, amount, method, reference);
     add('success', `Payment of ${formatCurrency(amount)} recorded`);
     setShowPayment(false);
     setPayInvoice(null);
@@ -188,7 +177,7 @@ export function InvoicesPage() {
         </Card>
       )}
 
-      {showPayment && payInvoice && hasAllPermissions([ACTION_PERMISSIONS.paymentsRecord, ACTION_PERMISSIONS.invoicesWrite]) && (
+      {showPayment && payInvoice && hasPermission(ACTION_PERMISSIONS.paymentsRecord) && (
         <PaymentModal invoice={payInvoice} onClose={() => setShowPayment(false)} onPay={recordPayment} />
       )}
     </div>
@@ -202,7 +191,7 @@ function PaymentModal({ invoice, onClose, onPay }: { invoice: Invoice; onClose: 
 
   return (
     <Modal open onClose={onClose} title="Record Payment" description={`${invoice.invoice_number} · Balance: ${formatCurrency(invoice.balance)}`}
-      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={() => onPay(invoice, amount, method, reference)} disabled={amount <= 0}>Record Payment</Button></>}>
+      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={() => onPay(invoice, amount, method, reference)} disabled={amount <= 0 || !reference.trim()}>Record Payment</Button></>}>
       <div className="space-y-4">
         <Input label="Amount" type="number" value={amount} onChange={(e) => setAmount(Number(e.target.value))} />
         <Select label="Payment Method" value={method} onChange={(e) => setMethod(e.target.value)}>
@@ -214,7 +203,7 @@ function PaymentModal({ invoice, onClose, onPay }: { invoice: Invoice; onClose: 
           <option value="Stripe">Stripe</option>
           <option value="PayPal">PayPal</option>
         </Select>
-        <Input label="Reference" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Payment reference" />
+        <Input label="Reference" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Payment reference" required />
       </div>
     </Modal>
   );
@@ -351,7 +340,7 @@ function InvoiceDetail({ invoice, onBack, onPay, onSend }: {
 }) {
   const [items, setItems] = useState<InvoiceItem[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
-  const { hasPermission, hasAllPermissions } = useOrganization();
+  const { hasPermission } = useOrganization();
   const tenant = useTenantData();
 
   useEffect(() => {
@@ -384,7 +373,7 @@ function InvoiceDetail({ invoice, onBack, onPay, onSend }: {
 
       <div className="flex flex-wrap gap-2">
         {invoice.status === 'draft' && hasPermission(ACTION_PERMISSIONS.invoicesApprove) && <Button onClick={() => onSend(invoice)}><Send size={14} /> Send Invoice</Button>}
-        {invoice.balance > 0 && invoice.status !== 'draft' && hasAllPermissions([ACTION_PERMISSIONS.paymentsRecord, ACTION_PERMISSIONS.invoicesWrite]) && <Button onClick={onPay}><DollarSign size={14} /> Record Payment</Button>}
+        {invoice.balance > 0 && invoice.status !== 'draft' && hasPermission(ACTION_PERMISSIONS.paymentsRecord) && <Button onClick={onPay}><DollarSign size={14} /> Record Payment</Button>}
       </div>
 
       <Card className="p-6">

@@ -260,7 +260,7 @@ function ClientModal({
         });
         add('success', 'Client updated');
       } else {
-        const [created] = await tenant.table('clients').insert({
+        await tenant.table('clients').insert({
           company_name: form.company_name,
           contact_person: form.contact_person,
           email: form.email,
@@ -278,16 +278,6 @@ function ClientModal({
           satisfaction_score: 5,
           created_by: profile?.id ?? null,
         }, { returning: 'id' });
-
-        // Log activity
-        await tenant.table('activities').insert({
-          user_id: profile?.id ?? null,
-          type: 'client_created',
-          entity: 'client',
-          entity_id: created.id,
-          description: `created client "${form.company_name}"`,
-          metadata: null,
-        });
         add('success', 'Client created');
       }
       onSaved();

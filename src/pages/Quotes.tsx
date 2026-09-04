@@ -14,6 +14,7 @@ import { PermissionGate } from '@/components/auth/PermissionGate';
 import { ACTION_PERMISSIONS } from '@/lib/authorization';
 import { runTenantLoader } from '@/lib/tenant-loaders';
 import { useOrganization } from '@/context/OrganizationContext';
+import { protectedWorkflows } from '@/lib/protected-workflows';
 
 type View = 'list' | 'detail' | 'create';
 
@@ -47,47 +48,18 @@ export function QuotesPage() {
   }, [quotes, statusFilter]);
 
   async function convertToInvoice(q: Quote) {
-    if (!hasPermission(ACTION_PERMISSIONS.invoicesWrite)) return;
-    await tenant.assertTenantRecord('quotes', q.id);
-    await tenant.assertTenantRecord('clients', q.client_id);
+    if (!hasAllPermissions([ACTION_PERMISSIONS.quotesApprove, ACTION_PERMISSIONS.invoicesWrite])) return;
     const invoiceNumber = generateNumber('INV');
-    const [invoice] = await tenant.table('invoices').insert({
-      invoice_number: invoiceNumber,
-      client_id: q.client_id,
-      quote_id: q.id,
-      title: q.title,
-      status: 'draft',
-      subtotal: q.subtotal,
-      discount: q.discount,
-      vat: q.vat,
-      total: q.total,
-      vat_rate: q.vat_rate,
-      balance: q.total,
-      issue_date: new Date().toISOString().slice(0, 10),
-      due_date: new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10),
-    }, { returning: '*' });
-    // Copy items
-    const items = await tenant.table('quote_items').select<QuoteItem>('*', { filters: [{ operator: 'eq', column: 'quote_id', value: q.id }] });
-    if (items.length > 0) {
-      await tenant.table('invoice_items').insert(
-        items.map((i) => ({ invoice_id: invoice.id, description: i.description, quantity: i.quantity, unit_price: i.unit_price, total: i.total }))
-      );
-    }
+    const issueDate = new Date().toISOString().slice(0, 10);
+    const dueDate = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+    await protectedWorkflows.convertQuoteToInvoice(q.id, invoiceNumber, issueDate, dueDate);
     add('success', `Invoice ${invoiceNumber} created from quote`);
+    await load();
   }
 
   async function convertToProject(q: Quote) {
     if (!hasAllPermissions([ACTION_PERMISSIONS.projectsWrite, ACTION_PERMISSIONS.quotesApprove])) return;
-    await tenant.assertTenantRecord('quotes', q.id);
-    await tenant.assertTenantRecord('clients', q.client_id);
-    await tenant.table('projects').insert({
-      name: q.title,
-      client_id: q.client_id,
-      type: 'other',
-      budget: q.total,
-      progress: 0,
-    });
-    await tenant.table('quotes').updateById(q.id, { status: 'accepted' });
+    await protectedWorkflows.convertQuoteToProject(q.id);
     add('success', 'Project created from quote');
     await load();
   }
@@ -119,14 +91,14 @@ export function QuotesPage() {
 
   async function sendQuote(q: Quote) {
     if (!hasPermission(ACTION_PERMISSIONS.quotesWrite)) return;
-    await tenant.table('quotes').updateById(q.id, { status: 'sent' });
+    await protectedWorkflows.sendQuote(q.id);
     add('success', 'Quote marked as sent');
     await load();
   }
 
   async function acceptQuote(q: Quote) {
     if (!hasPermission(ACTION_PERMISSIONS.quotesApprove)) return;
-    await tenant.table('quotes').updateById(q.id, { status: 'accepted', approved_by_client: true, approved_at: new Date().toISOString() });
+    await protectedWorkflows.approveQuote(q.id);
     add('success', 'Quote accepted');
     await load();
   }
@@ -251,7 +223,6 @@ function QuoteCreate({ clients, onBack, onCreated }: { clients: Client[]; onBack
       if (items.length > 0) {
         await tenant.table('quote_items').insert(items.map((i) => ({ quote_id: quote.id, description: i.description, quantity: i.quantity, unit_price: i.unit_price, total: i.total })));
       }
-      await tenant.table('activities').insert({ user_id: profile?.id ?? null, type: 'quote_created', entity: 'quote', entity_id: quote.id, description: `created quote ${quoteNumber} for ${clients.find(c => c.id === clientId)?.company_name}`, metadata: null });
       add('success', 'Quote created');
       onCreated();
     } catch (err) {
@@ -371,8 +342,8 @@ function QuoteDetail({ quote, onBack, onConvertInvoice, onConvertProject, onDupl
       <div className="flex flex-wrap gap-2">
         {quote.status === 'draft' && hasPermission(ACTION_PERMISSIONS.quotesWrite) && <Button onClick={() => onSend(quote)}><Send size={14} /> Send Quote</Button>}
         {quote.status === 'sent' && hasPermission(ACTION_PERMISSIONS.quotesApprove) && <Button onClick={() => onAccept(quote)} variant="subtle"><Check size={14} /> Mark Accepted</Button>}
-        {hasPermission(ACTION_PERMISSIONS.invoicesWrite) && <Button variant="outline" onClick={() => onConvertInvoice(quote)}><Receipt size={14} /> Convert to Invoice</Button>}
-        {hasAllPermissions([ACTION_PERMISSIONS.projectsWrite, ACTION_PERMISSIONS.quotesApprove]) && <Button variant="outline" onClick={() => onConvertProject(quote)}><Briefcase size={14} /> Convert to Project</Button>}
+        {quote.status === 'accepted' && hasAllPermissions([ACTION_PERMISSIONS.invoicesWrite, ACTION_PERMISSIONS.quotesApprove]) && <Button variant="outline" onClick={() => onConvertInvoice(quote)}><Receipt size={14} /> Convert to Invoice</Button>}
+        {quote.status === 'accepted' && hasAllPermissions([ACTION_PERMISSIONS.projectsWrite, ACTION_PERMISSIONS.quotesApprove]) && <Button variant="outline" onClick={() => onConvertProject(quote)}><Briefcase size={14} /> Convert to Project</Button>}
         {hasPermission(ACTION_PERMISSIONS.quotesWrite) && <Button variant="ghost" onClick={() => onDuplicate(quote)}><Copy size={14} /> Duplicate</Button>}
       </div>
 

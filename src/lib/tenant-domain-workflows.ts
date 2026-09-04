@@ -57,29 +57,17 @@ export async function markTenantNotificationsRead(
 }
 
 interface MoveLeadInput {
-  tenant: TenantDataApi;
   canWrite: boolean;
   leadId: string;
-  companyName: string;
   stage: LeadStage;
-  userId: string | null;
+  changeStage: (leadId: string, stage: LeadStage) => Promise<unknown>;
 }
 
 /**
- * The update deliberately completes before the presentation-history insert.
- * A forged/cross-tenant lead UUID therefore fails closed without emitting an
- * activity that claims the move succeeded.
+ * The database workflow changes the stage and emits its activity atomically.
  */
 export async function moveLeadWithActivity(input: MoveLeadInput): Promise<void> {
   if (!input.canWrite) throw new Error('Lead write permission is required');
 
-  await input.tenant.table('leads').updateById(input.leadId, { stage: input.stage });
-  await input.tenant.table('activities').insert({
-    user_id: input.userId,
-    type: 'lead_stage_change',
-    entity: 'lead',
-    entity_id: input.leadId,
-    description: `moved lead "${input.companyName}" to ${input.stage.replace('_', ' ')}`,
-    metadata: null,
-  });
+  await input.changeStage(input.leadId, input.stage);
 }

@@ -209,7 +209,7 @@ function ProjectModal({ open, onClose, clients, members, onSaved }: { open: bool
       if (canManageProjects) {
         await Promise.all(assignedTo.map((userId) => tenant.members.assertActive(userId)));
       }
-      const [project] = await tenant.table('projects').insert({
+      await tenant.table('projects').insert({
         name: form.name,
         client_id: form.client_id,
         type: form.type || 'other',
@@ -221,7 +221,6 @@ function ProjectModal({ open, onClose, clients, members, onSaved }: { open: bool
         created_by: profile?.id ?? null,
         ...(canManageProjects ? { assigned_to: assignedTo } : {}),
       }, { returning: 'id' });
-      await tenant.table('activities').insert({ user_id: profile?.id ?? null, type: 'project_created', entity: 'project', entity_id: project.id, description: `created project "${form.name}"`, metadata: null });
       add('success', 'Project created');
       onSaved();
     } catch (err) {
