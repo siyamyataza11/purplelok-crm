@@ -92,11 +92,12 @@ jobs:
             20260903120000_batch_5f_d1_authorization_foundation.sql
             20260903180000_batch_5f_d2_permission_catalogue.sql
             20260904120000_batch_5f_d3_domain_rls_cutover.sql
+            20260904180000_batch_5f_d4_protected_workflows.sql
           )
 
           mapfile -t actual < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort)
           if [[ "${actual[*]}" != "${expected[*]}" ]]; then
-            echo "Migration inventory differs from the approved eleven-file Batch 5F-D3 sequence."
+            echo "Migration inventory differs from the approved twelve-file Batch 5F-D4 sequence."
             printf 'Expected: %s\n' "${expected[@]}"
             printf 'Actual: %s\n' "${actual[@]}"
             exit 1
