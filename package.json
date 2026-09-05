@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.scripts.json",
     "test:frontend": "npm run test:frontend:pure && npm run test:frontend:integration",
     "test:frontend:pure": "tsx --test tests/frontend/*.test.ts",
-    "test:frontend:integration": "vitest run tests/frontend/batch4-organization-context.integration.test.tsx tests/frontend/batch5d-collaboration.integration.test.tsx tests/frontend/batch5e-auth-containment.integration.test.tsx tests/frontend/batch5e-auth-context-hardening.integration.test.tsx",
+    "test:frontend:integration": "vitest run tests/frontend/batch4-organization-context.integration.test.tsx tests/frontend/batch5d-collaboration.integration.test.tsx tests/frontend/batch5e-auth-containment.integration.test.tsx tests/frontend/batch5e-auth-context-hardening.integration.test.tsx tests/frontend/batch5e-password-recovery.integration.test.tsx tests/frontend/batch5e-supabase-recovery-provenance.integration.test.tsx",
     "test:provisioning": "tsx --test scripts/provisioning/tenant-provisioning.test.ts scripts/provisioning/member-provisioning.test.ts",
     "test:repair": "tsx --test scripts/repairs/batch5a-domain-drift-repair.test.ts",
     "check:tenant-queries": "node --experimental-strip-types scripts/check-domain-query-baseline.ts",
