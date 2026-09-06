@@ -1,0 +1,206 @@
+name: Production D1 cutover
+
+on:
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: Exact approved repository commit
+        required: true
+        type: string
+      confirm_project_ref:
+        description: Exact production Supabase project ref
+        required: true
+        type: string
+      confirm_d1_only:
+        description: Type APPLY_D1_ONLY
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: purplelok-production-d1
+  cancel-in-progress: false
+
+jobs:
+  apply-d1:
+    name: Apply production D1 only
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Validate manual confirmations
+        shell: bash
+        env:
+          INPUT_SHA: ${{ inputs.approved_sha }}
+          INPUT_PROJECT: ${{ inputs.confirm_project_ref }}
+          INPUT_SCOPE: ${{ inputs.confirm_d1_only }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+          CURRENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          [[ "${CURRENT_REPOSITORY}" == "siyamyataza11/purplelok-crm" ]]
+          [[ "${CURRENT_REF}" == "refs/heads/security/multi-tenant-rbac" ]]
+          [[ "${INPUT_SHA}" == "88c1a47e7ccaf00d74e8055e9bb2641d7bc92a0c" ]]
+          [[ "${INPUT_PROJECT}" == "vkgvfllqgfleosufzwhc" ]]
+          [[ "${INPUT_SCOPE}" == "APPLY_D1_ONLY" ]]
+
+      - name: Checkout cutover control code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: control
+
+      - name: Checkout exact approved application commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.approved_sha }}
+          fetch-depth: 1
+          path: approved
+
+      - name: Verify checkout and canonical D1 object
+        shell: bash
+        working-directory: approved
+        env:
+          INPUT_SHA: ${{ inputs.approved_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "${INPUT_SHA}" ]]
+          migration_path="supabase/migrations/20260903120000_batch_5f_d1_authorization_foundation.sql"
+          blob="$(git rev-parse "${INPUT_SHA}:${migration_path}")"
+          [[ "${blob}" == "cc7a80b853c14f8a75521574dc7e5ef698ef6e0c" ]]
+          raw_sha256="$(git cat-file blob "${INPUT_SHA}:${migration_path}" | sha256sum | cut -d ' ' -f 1)"
+          [[ "${raw_sha256}" == "12777c2a3bb364bf40e4cbddb0fe2bf1007fde1371e535ea201b5d611a0def1d" ]]
+          echo "Approved commit and canonical D1 object verified."
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: control/package-lock.json
+
+      - name: Install locked dependencies
+        working-directory: control
+        run: npm ci
+
+      - name: Set up Supabase CLI 2.116.0
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.116.0
+
+      - name: Mask production database secret
+        shell: bash
+        env:
+          DIRECT_DB_URL: ${{ secrets.SUPABASE_PROD_DIRECT_DB_URL }}
+        run: |
+          set -euo pipefail
+          [[ -n "${DIRECT_DB_URL}" ]]
+          echo "::add-mask::${DIRECT_DB_URL}"
+
+      - name: Run direct-connection stability and full pre-D1 gate
+        shell: bash
+        working-directory: control
+        env:
+          SUPABASE_PROD_DIRECT_DB_URL: ${{ secrets.SUPABASE_PROD_DIRECT_DB_URL }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_PROD_DIRECT_DB_URL }}
+        run: |
+          set -euo pipefail
+          node --import tsx scripts/preflight/batch5f-d1-production-check.ts pre
+          node --import tsx scripts/preflight/batch5f-pre-d2-production-check.ts
+
+      - name: Build isolated D1-only migration inventory
+        id: inventory
+        shell: bash
+        env:
+          INPUT_SHA: ${{ inputs.approved_sha }}
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/purplelok-production-d1"
+          migrations="${root}/supabase/migrations"
+          mkdir -p "${migrations}"
+          cp approved/supabase/config.toml "${root}/supabase/config.toml"
+          expected=(
+            20260728110005_create_crm_schema.sql
+            20260728111045_seed_demo_data.sql
+            20260828120000_batch_1_identity_rbac_foundation.sql
+            20260828150000_batch_3b_tenant_ownership_foundation.sql
+            20260828170000_batch_4_active_organization_context.sql
+            20260829100000_batch_5a_tenant_data_foundation.sql
+            20260831120000_batch_5e_b2r_profile_authority.sql
+            20260902120000_batch_5f_c1_auth_session_gate.sql
+            20260903120000_batch_5f_d1_authorization_foundation.sql
+          )
+          for migration in "${expected[@]}"; do
+            git -C approved cat-file blob "${INPUT_SHA}:supabase/migrations/${migration}" > "${migrations}/${migration}"
+          done
+          mapfile -t actual < <(find "${migrations}" -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort)
+          [[ "${actual[*]}" == "${expected[*]}" ]]
+          [[ ! -e "${migrations}/20260903180000_batch_5f_d2_permission_catalogue.sql" ]]
+          [[ ! -e "${migrations}/20260904120000_batch_5f_d3_domain_rls_cutover.sql" ]]
+          [[ ! -e "${migrations}/20260904180000_batch_5f_d4_protected_workflows.sql" ]]
+          d1_sha="$(sha256sum "${migrations}/20260903120000_batch_5f_d1_authorization_foundation.sql" | cut -d ' ' -f 1)"
+          [[ "${d1_sha}" == "12777c2a3bb364bf40e4cbddb0fe2bf1007fde1371e535ea201b5d611a0def1d" ]]
+          echo "root=${root}" >> "${GITHUB_OUTPUT}"
+
+      - name: Prove D1 is the only pending migration
+        id: plan
+        shell: bash
+        env:
+          SUPABASE_PROD_DIRECT_DB_URL: ${{ secrets.SUPABASE_PROD_DIRECT_DB_URL }}
+          CUTOVER_ROOT: ${{ steps.inventory.outputs.root }}
+        run: |
+          set -euo pipefail
+          plan_file="${RUNNER_TEMP}/d1-migration-plan.json"
+          supabase migration list \
+            --db-url "${SUPABASE_PROD_DIRECT_DB_URL}" \
+            --workdir "${CUTOVER_ROOT}" \
+            --output-format json > "${plan_file}"
+          node --input-type=module - "${plan_file}" <<'NODE'
+          import fs from 'node:fs';
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const actual = plan.migrations.map(({ local, remote }) => [local || '', remote || '']);
+          const expected = [
+            ['20260728110005', '20260728110005'],
+            ['20260728111045', '20260728111045'],
+            ['20260828120000', '20260828120000'],
+            ['20260828150000', '20260828150000'],
+            ['20260828170000', '20260828170000'],
+            ['20260829100000', '20260829100000'],
+            ['20260831120000', '20260831120000'],
+            ['20260902120000', '20260902120000'],
+            ['20260903120000', ''],
+          ];
+          if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            throw new Error('Isolated migration plan is not the exact eight-applied plus D1-pending matrix');
+          }
+          console.log('Exactly one pending migration verified: D1.');
+          NODE
+
+      - name: Apply canonical D1 only
+        id: apply
+        shell: bash
+        env:
+          SUPABASE_PROD_DIRECT_DB_URL: ${{ secrets.SUPABASE_PROD_DIRECT_DB_URL }}
+          CUTOVER_ROOT: ${{ steps.inventory.outputs.root }}
+        run: |
+          set -euo pipefail
+          supabase migration up \
+            --db-url "${SUPABASE_PROD_DIRECT_DB_URL}" \
+            --workdir "${CUTOVER_ROOT}" \
+            --yes
+
+      - name: Verify production state after the D1 attempt
+        if: ${{ always() && steps.apply.outcome != 'skipped' }}
+        shell: bash
+        env:
+          SUPABASE_PROD_DIRECT_DB_URL: ${{ secrets.SUPABASE_PROD_DIRECT_DB_URL }}
+        working-directory: control
+        run: node --import tsx scripts/preflight/batch5f-d1-production-check.ts after
+
+      - name: Remove temporary migration material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -rf -- "${RUNNER_TEMP}/purplelok-production-d1" "${RUNNER_TEMP}/d1-migration-plan.json"
