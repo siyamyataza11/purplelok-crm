@@ -15,7 +15,7 @@ import {
   hasAnyPermission as hasAny,
   hasPermission as hasOne,
   isPermissionKey,
-  PERMISSION_KEYS,
+  recognizePermissionCatalogue,
   type PermissionKey,
 } from '@/lib/authorization';
 import {
@@ -240,11 +240,10 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
       if (mappingsResult.error) throw mappingsResult.error;
       if (catalogueResult.error) throw catalogueResult.error;
 
-      const catalogueKeys = new Set(
+      const catalogueKeys = recognizePermissionCatalogue(
         (catalogueResult.data ?? []).map((permission) => permission.key as string),
       );
-      if (catalogueKeys.size !== PERMISSION_KEYS.length
-        || PERMISSION_KEYS.some((permission) => !catalogueKeys.has(permission))) {
+      if (!catalogueKeys) {
         throw new Error('Permission catalogue does not match the application contract');
       }
 

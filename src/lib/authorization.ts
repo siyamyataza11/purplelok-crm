@@ -35,10 +35,63 @@ export const PERMISSION_KEYS = [
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
+export const PRE_D2_PERMISSION_KEYS = [
+  'members.read',
+  'members.manage',
+  'roles.read',
+  'roles.manage',
+  'clients.read',
+  'clients.write',
+  'leads.read',
+  'leads.write',
+  'projects.read',
+  'projects.write',
+  'projects.manage',
+  'tasks.read',
+  'tasks.write',
+  'quotes.read',
+  'quotes.write',
+  'quotes.approve',
+  'invoices.read',
+  'invoices.write',
+  'invoices.approve',
+  'payments.read',
+  'payments.record',
+  'documents.read',
+  'documents.write',
+  'tickets.read',
+  'tickets.write',
+  'reports.read',
+  'settings.read',
+  'settings.manage',
+] as const satisfies readonly PermissionKey[];
+
 const PERMISSION_KEY_SET = new Set<string>(PERMISSION_KEYS);
 
 export function isPermissionKey(value: string): value is PermissionKey {
   return PERMISSION_KEY_SET.has(value);
+}
+
+function isExactPermissionCatalogue(
+  keys: readonly string[],
+  expected: readonly PermissionKey[],
+): boolean {
+  if (keys.length !== expected.length) return false;
+  const uniqueKeys = new Set(keys);
+  return uniqueKeys.size === expected.length
+    && expected.every((permission) => uniqueKeys.has(permission));
+}
+
+export function recognizePermissionCatalogue(
+  keys: readonly string[],
+): ReadonlySet<PermissionKey> | null {
+  if (isExactPermissionCatalogue(keys, PRE_D2_PERMISSION_KEYS)) {
+    return new Set(PRE_D2_PERMISSION_KEYS);
+  }
+  if (isExactPermissionCatalogue(keys, PERMISSION_KEYS)) {
+    return new Set(PERMISSION_KEYS);
+  }
+  return null;
 }
 
 export type AppPage =

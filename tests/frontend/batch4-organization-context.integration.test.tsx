@@ -55,7 +55,11 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { ToastProvider } from '@/components/ui/Toast';
 import { OrganizationProvider, useOrganization } from '@/context/OrganizationContext';
 import { TenantDataProvider } from '@/context/TenantDataContext';
-import { PERMISSION_KEYS, type PermissionKey } from '@/lib/authorization';
+import {
+  PERMISSION_KEYS,
+  PRE_D2_PERMISSION_KEYS,
+  type PermissionKey,
+} from '@/lib/authorization';
 import { ProjectsPage } from '@/pages/Projects';
 
 const NOW = '2026-08-28T00:00:00.000Z';
@@ -186,6 +190,7 @@ const role = (organizationId: string) => ({
 type Dataset = {
   membershipsByUser: Record<string, ReturnType<typeof membership>[]>;
   permissionsByOrganization: Record<string, PermissionKey[]>;
+  catalogueKeys?: readonly string[];
 };
 
 function datasetHandler(
@@ -221,7 +226,7 @@ function datasetHandler(
         })));
       }
       case 'permissions':
-        return ok(PERMISSION_KEYS.map((key) => ({ key })));
+        return ok((data.catalogueKeys ?? PERMISSION_KEYS).map((key) => ({ key })));
       case 'rpc:get_organization_member_directory':
         return ok([{ organization_id: 'a', membership_id: 'member-user-a-a', user_id: 'team-user', full_name: 'Team Member', email: 'team@example.test', job_title: null, avatar_url: null }]);
       case 'projects':
@@ -301,6 +306,71 @@ describe('Batch 4 organization authorization integration', () => {
       'permissions',
     ]);
     expect(screen.getByTestId('permissions').textContent).toBe('clients.read,projects.read');
+  });
+
+  it('accepts the exact 28-key pre-D2 catalogue without granting future permissions', async () => {
+    const data: Dataset = {
+      ...baseDataset(['clients.read']),
+      catalogueKeys: PRE_D2_PERMISSION_KEYS,
+    };
+    testDependencies.client = new FakeSupabase(datasetHandler(data, (query) =>
+      query.table === 'organization_roles'
+        ? ok([{ ...role('a'), name: 'Owner', key: 'owner' }])
+        : undefined));
+    renderProvider();
+    await expectReady();
+
+    expect(observedContext?.roles.map(({ key }) => key)).toEqual(['owner']);
+    expect(observedContext?.hasPermission('clients.read')).toBe(true);
+    expect(observedContext?.hasPermission('activities.read')).toBe(false);
+    expect(observedContext?.hasPermission('collaboration.read')).toBe(false);
+    expect(observedContext?.hasPermission('collaboration.write')).toBe(false);
+    expect(observedContext?.hasPermission('collaboration.manage')).toBe(false);
+  });
+
+  it('accepts the exact 32-key post-D2 catalogue', async () => {
+    testDependencies.client = new FakeSupabase(datasetHandler({
+      ...baseDataset(['activities.read', 'collaboration.manage']),
+      catalogueKeys: PERMISSION_KEYS,
+    }));
+    renderProvider();
+    await expectReady();
+    expect(screen.getByTestId('permissions').textContent).toBe(
+      'activities.read,collaboration.manage',
+    );
+  });
+
+  it('rejects a future permission mapping while the exact pre-D2 catalogue is active', async () => {
+    testDependencies.client = new FakeSupabase(datasetHandler({
+      ...baseDataset(['activities.read']),
+      catalogueKeys: PRE_D2_PERMISSION_KEYS,
+    }));
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId('error').textContent).toBe('authorization_error'));
+    expect(screen.getByTestId('organization').textContent).toBe('none');
+    expect(observedContext?.permissions.size).toBe(0);
+  });
+
+  it.each([
+    ['28 legacy keys plus an unknown key', [...PRE_D2_PERMISSION_KEYS, 'unknown.read']],
+    ['a 30-key partial D2 catalogue', PERMISSION_KEYS.slice(0, 30)],
+    ['a 31-key partial D2 catalogue', PERMISSION_KEYS.slice(0, 31)],
+    ['more than 32 keys', [...PERMISSION_KEYS, 'unknown.read']],
+    ['32 keys with one wrong key', [...PERMISSION_KEYS.slice(0, 31), 'unknown.read']],
+    ['a catalogue missing a required legacy key', PRE_D2_PERMISSION_KEYS.slice(0, 27)],
+    [
+      'a malformed catalogue containing a duplicate',
+      [...PRE_D2_PERMISSION_KEYS.slice(0, 27), PRE_D2_PERMISSION_KEYS[0]],
+    ],
+  ])('fails closed for %s', async (_description, catalogueKeys) => {
+    testDependencies.client = new FakeSupabase(datasetHandler({
+      ...baseDataset(['clients.read']),
+      catalogueKeys,
+    }));
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId('error').textContent).toBe('authorization_error'));
+    expect(screen.getByTestId('organization').textContent).toBe('none');
+    expect(observedContext?.permissions.size).toBe(0);
   });
 
   it('fails closed when the membership query fails', async () => {
