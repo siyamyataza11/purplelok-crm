@@ -299,11 +299,6 @@ export class ControlledSupabaseAuthStorage implements SupportedStorage {
     this.tombstoned = false;
     this.freshAuthenticationActive = true;
     this.revision += 1;
-    const storage = this.backingStorage();
-    if (!storage) return;
-    for (const key of this.knownKeys) {
-      this.clearDurableTombstone(storage, key);
-    }
   }
 
   getRevision(): number {

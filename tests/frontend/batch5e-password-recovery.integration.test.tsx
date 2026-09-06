@@ -174,6 +174,8 @@ class FakeSupabase {
   pendingRecovery: { source: 'PASSWORD_RECOVERY'; sequence: number; session: Session } | null = null;
   recoveryExchangeSession: Session | null = null;
   recoveryExchangeError = false;
+  enforcePkceVerifier = false;
+  pkceVerifierPersisted = false;
   recoveryExchangeSequence = 0;
   quarantineListeners: Array<(active: boolean) => void> = [];
   organizationFixtures: Record<string, unknown[]> = {};
@@ -212,9 +214,12 @@ class FakeSupabase {
   }
   exchangeRecoveryCode(code: string) {
     this.calls.push('exchangeCodeForSession');
-    if (this.recoveryExchangeError || code !== 'valid-recovery-code') {
+    if (this.recoveryExchangeError
+      || code !== 'valid-recovery-code'
+      || (this.enforcePkceVerifier && !this.pkceVerifierPersisted)) {
       return Promise.resolve(null);
     }
+    this.pkceVerifierPersisted = false;
     const session = this.recoveryExchangeSession
       ?? authSession('user-a', 'recovery-token', 'recovery_pending_v1');
     this.currentSession = session;
@@ -234,7 +239,9 @@ class FakeSupabase {
     return Promise.resolve({ error: null });
   }
   resetPasswordForEmail(email: string, options: { redirectTo: string }) {
+    this.calls.push('resetPasswordForEmail');
     this.resetRequests.push({ email, redirectTo: options.redirectTo });
+    if (!this.storageBlocked) this.pkceVerifierPersisted = true;
     return Promise.resolve({ data: {}, error: this.resetError });
   }
   updateUser(attributes: { password: string }) {
@@ -293,12 +300,14 @@ class FakeSupabase {
     };
   }
   beginAuthPersistence() {
+    this.calls.push('beginAuthPersistence');
     this.storageBlocked = false;
     this.storageRevision += 1;
   }
   purgeAuthStorage() {
     this.calls.push('purgeAuthStorage');
     this.storageBlocked = true;
+    this.pkceVerifierPersisted = false;
     this.currentSession = null;
     this.storageRevision += 1;
     return true;
@@ -460,6 +469,74 @@ describe('Batch 5E-B3 reset request', () => {
     await waitForUnauthenticated();
     expect(screen.queryByText(/sign up/i)).toBeNull();
     expect(screen.queryByText(/create account/i)).toBeNull();
+  });
+});
+
+describe('Batch 5F-C2R PKCE verifier persistence', () => {
+  it('reopens tombstoned storage before reset so the same-browser callback can exchange', async () => {
+    dependencies.client!.storageBlocked = true;
+    dependencies.client!.enforcePkceVerifier = true;
+    renderGate();
+    await waitForUnauthenticated();
+
+    expect(await observed!.resetPassword('user-a@example.test')).toEqual({ error: null });
+    expect(dependencies.client!.pkceVerifierPersisted).toBe(true);
+    expect(dependencies.client!.calls.indexOf('beginAuthPersistence')).toBeLessThan(
+      dependencies.client!.calls.indexOf('resetPasswordForEmail'),
+    );
+
+    dependencies.client!.recoveryExchangeSession = authSession(
+      'user-a',
+      'same-browser-recovery-token',
+      'recovery_pending_v1',
+    );
+    window.history.replaceState({}, '', '/auth/recovery?code=valid-recovery-code');
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    await waitFor(() => expect(observed?.status).toBe('password_recovery'));
+    expect(observed?.recoveryCanUpdate).toBe(true);
+    expect(dependencies.client!.pkceVerifierPersisted).toBe(false);
+  });
+
+  it('a different browser without the verifier cannot exchange the recovery code', async () => {
+    dependencies.client!.storageBlocked = true;
+    dependencies.client!.enforcePkceVerifier = true;
+    renderGate();
+    await waitForUnauthenticated();
+    expect(await observed!.resetPassword('user-a@example.test')).toEqual({ error: null });
+
+    dependencies.client!.pkceVerifierPersisted = false;
+    window.history.replaceState({}, '', '/auth/recovery?code=valid-recovery-code');
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    expect(await screen.findByText(AUTH_MESSAGES.recoveryFailed)).toBeTruthy();
+    expect(observed?.status).toBe('verification_error');
+    expect(observed?.recoveryCanUpdate).toBe(false);
+  });
+
+  it('a failed reset request re-purges storage and removes the provisional verifier', async () => {
+    dependencies.client!.storageBlocked = true;
+    dependencies.client!.enforcePkceVerifier = true;
+    dependencies.client!.resetError = { message: 'provider failure detail' };
+    renderGate();
+    await waitForUnauthenticated();
+
+    expect(await observed!.resetPassword('user-a@example.test')).toEqual({
+      error: AUTH_MESSAGES.passwordResetFailed,
+    });
+    expect(dependencies.client!.calls.indexOf('beginAuthPersistence')).toBeLessThan(
+      dependencies.client!.calls.indexOf('resetPasswordForEmail'),
+    );
+    expect(dependencies.client!.calls.indexOf('purgeAuthStorage')).toBeGreaterThan(
+      dependencies.client!.calls.indexOf('resetPasswordForEmail'),
+    );
+    expect(dependencies.client!.storageBlocked).toBe(true);
+    expect(dependencies.client!.pkceVerifierPersisted).toBe(false);
+    expect(observed?.status).toBe('unauthenticated');
   });
 });
 

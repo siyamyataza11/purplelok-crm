@@ -85,6 +85,18 @@ describe('Batch 5F-C2 private PKCE recovery provenance', () => {
     expect(sdk.exchangeCalls).toEqual(['expired-code']);
   });
 
+  it('rejects a blank code and never exchanges a second code after success', async () => {
+    const module = await import('@/lib/supabase');
+    expect(await module.exchangePasswordRecoveryCodeOnce('')).toBeNull();
+    expect(sdk.exchangeCalls).toEqual([]);
+
+    const first = await module.exchangePasswordRecoveryCodeOnce('first-valid-code');
+    const repeated = await module.exchangePasswordRecoveryCodeOnce('duplicate-code');
+    expect(first?.source).toBe('PKCE_CODE_EXCHANGE');
+    expect(repeated).toBe(first);
+    expect(sdk.exchangeCalls).toEqual(['first-valid-code']);
+  });
+
   it('exports no implicit-event recovery relabelling API', async () => {
     const module = await import('@/lib/supabase');
     expect(Object.keys(module)).not.toContain('claimPasswordRecoveryEvent');

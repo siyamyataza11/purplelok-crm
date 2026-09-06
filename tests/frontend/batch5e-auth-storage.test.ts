@@ -98,6 +98,30 @@ test('stale writes stay blocked until an explicit fresh authentication begins', 
   assert.equal(supabaseAuthStorage.getItem('sdk-selected-key-e'), 'intentional-fresh-session');
 });
 
+test('PKCE persistence never clears a failed stale-session tombstone', () => {
+  const values = new Map([['sdk-selected-auth-key', 'old-session']]);
+  installStorage(values, (key) => {
+    if (key === 'sdk-selected-auth-key') throw new Error('credential removal failed');
+    values.delete(key);
+  });
+  const adapter = new ControlledSupabaseAuthStorage();
+  assert.equal(adapter.getItem('sdk-selected-auth-key'), 'old-session');
+  assert.equal(adapter.purge(), false);
+
+  const verifierKey = 'sdk-selected-auth-key-code-verifier';
+  adapter.setItem(verifierKey, 'test-pkce-verifier');
+  assert.equal(values.has(verifierKey), false);
+  assert.equal(adapter.getItem(verifierKey), null);
+
+  adapter.beginFreshAuthentication();
+  adapter.setItem(verifierKey, 'test-pkce-verifier');
+  assert.equal(adapter.getItem(verifierKey), 'test-pkce-verifier');
+
+  const reloadedAdapter = new ControlledSupabaseAuthStorage();
+  assert.equal(reloadedAdapter.getItem('sdk-selected-auth-key'), null);
+  assert.equal(reloadedAdapter.getItem(verifierKey), null);
+});
+
 test('durable tombstone rejects old session after complete adapter recreation', () => {
   const oldSession = 'old-session-secret-bytes';
   const values = new Map([['sdk-selected-key-reload', oldSession]]);

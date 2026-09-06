@@ -1064,8 +1064,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setRecoveryError(null);
     try {
       const redirectTo = getPasswordRecoveryRedirectUrl();
+      beginSupabaseAuthPersistence();
       const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
       if (error) {
+        purgeSupabaseAuthStorage();
         setRecoveryStatus('recovery_error');
         setRecoveryError(AUTH_MESSAGES.passwordResetFailed);
         return { error: AUTH_MESSAGES.passwordResetFailed };
@@ -1073,6 +1075,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setRecoveryStatus('reset_email_sent');
       return { error: null };
     } catch {
+      purgeSupabaseAuthStorage();
       setRecoveryStatus('recovery_error');
       setRecoveryError(AUTH_MESSAGES.passwordResetFailed);
       return { error: AUTH_MESSAGES.passwordResetFailed };
