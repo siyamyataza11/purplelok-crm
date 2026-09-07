@@ -1,0 +1,105 @@
+name: Production D4 cutover (executor intentionally unconfigured)
+
+on:
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: Exact approved application SHA
+        required: true
+        type: string
+      confirm_project_ref:
+        description: Exact production project ref
+        required: true
+        type: string
+      confirm_d4_only:
+        description: Type APPLY_D4_ONLY
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: purplelok-production-d4
+  cancel-in-progress: false
+
+jobs:
+  prepare-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Validate manual confirmations
+        shell: bash
+        env:
+          INPUT_SHA: ${{ inputs.approved_sha }}
+          INPUT_REF: ${{ inputs.confirm_project_ref }}
+          INPUT_SCOPE: ${{ inputs.confirm_d4_only }}
+        run: |
+          set -euo pipefail
+          test "$INPUT_SHA" = "88c1a47e7ccaf00d74e8055e9bb2641d7bc92a0c"
+          test "$INPUT_REF" = "vkgvfllqgfleosufzwhc"
+          test "$INPUT_SCOPE" = "APPLY_D4_ONLY"
+
+      - name: Checkout cutover controls
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout exact approved application source
+        uses: actions/checkout@v4
+        with:
+          ref: 88c1a47e7ccaf00d74e8055e9bb2641d7bc92a0c
+          fetch-depth: 0
+          path: approved
+
+      - name: Verify exact D4 Git object
+        shell: bash
+        working-directory: approved
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "88c1a47e7ccaf00d74e8055e9bb2641d7bc92a0c"
+          path='supabase/migrations/20260904180000_batch_5f_d4_protected_workflows.sql'
+          test "$(git rev-parse "HEAD:$path")" = "599f485908aa995672dfa8201a391672efc08e35"
+          test "$(git cat-file blob "HEAD:$path" | sha256sum | cut -d' ' -f1)" = "5ed664dfd795608f02896ad6d9dfb2812fb7b3185a4164690f81d9cd4de6a38e"
+          test "$(git cat-file -s "HEAD:$path")" = "19208"
+
+      - name: Construct isolated D4-only migration inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          store="$RUNNER_TEMP/d4-migrations"
+          mkdir -p "$store"
+          expected=(
+            20260728110005_create_crm_schema.sql
+            20260728111045_seed_demo_data.sql
+            20260828120000_batch_1_identity_rbac_foundation.sql
+            20260828150000_batch_3b_tenant_ownership_foundation.sql
+            20260828170000_batch_4_active_organization_context.sql
+            20260829100000_batch_5a_tenant_data_foundation.sql
+            20260831120000_batch_5e_b2r_profile_authority.sql
+            20260902120000_batch_5f_c1_auth_session_gate.sql
+            20260903120000_batch_5f_d1_authorization_foundation.sql
+            20260903180000_batch_5f_d2_permission_catalogue.sql
+            20260904120000_batch_5f_d3_domain_rls_cutover.sql
+            20260904180000_batch_5f_d4_protected_workflows.sql
+          )
+          for migration in "${expected[@]}"; do
+            cp -- "approved/supabase/migrations/$migration" "$store/$migration"
+          done
+          mapfile -t actual < <(find "$store" -maxdepth 1 -type f -printf '%f\n' | sort)
+          mapfile -t sorted_expected < <(printf '%s\n' "${expected[@]}" | sort)
+          test "${actual[*]}" = "${sorted_expected[*]}"
+          test "${#actual[@]}" = 12
+
+      - name: Executor is deliberately unavailable
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'D4 package verified. Production executor is intentionally unconfigured pending separate review.'
+          exit 1
+
+      # Future reviewed wiring must run, in this exact order:
+      # 1. node scripts/preflight/batch5f-d4-production-check.ts pre
+      # 2. apply only the isolated D4 migration with the approved D1-D3 executor
+      # 3. node scripts/preflight/batch5f-d4-production-check.ts after
+      # 4. node scripts/preflight/batch5f-d4-rpc-smoke.ts
