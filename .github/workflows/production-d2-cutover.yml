@@ -1,0 +1,142 @@
+name: Production D2 cutover
+
+on:
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: Exact approved application commit
+        required: true
+        type: string
+      confirm_project_ref:
+        description: Exact production Supabase project ref
+        required: true
+        type: string
+      confirm_d2_only:
+        description: Type APPLY_D2_ONLY
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: purplelok-production-d2
+  cancel-in-progress: false
+
+jobs:
+  package-d2:
+    name: Validate D2-only production package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Validate manual confirmations
+        shell: bash
+        env:
+          INPUT_SHA: ${{ inputs.approved_sha }}
+          INPUT_PROJECT: ${{ inputs.confirm_project_ref }}
+          INPUT_SCOPE: ${{ inputs.confirm_d2_only }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+          CURRENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          [[ "${CURRENT_REPOSITORY}" == "siyamyataza11/purplelok-crm" ]]
+          [[ "${CURRENT_REF}" == "refs/heads/security/multi-tenant-rbac" ]]
+          [[ "${INPUT_SHA}" == "88c1a47e7ccaf00d74e8055e9bb2641d7bc92a0c" ]]
+          [[ "${INPUT_PROJECT}" == "vkgvfllqgfleosufzwhc" ]]
+          [[ "${INPUT_SCOPE}" == "APPLY_D2_ONLY" ]]
+
+      - name: Checkout cutover control code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: control
+
+      - name: Checkout exact approved application commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.approved_sha }}
+          fetch-depth: 1
+          path: approved
+
+      - name: Verify canonical D2 Git object
+        shell: bash
+        working-directory: approved
+        env:
+          INPUT_SHA: ${{ inputs.approved_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "${INPUT_SHA}" ]]
+          migration_path="supabase/migrations/20260903180000_batch_5f_d2_permission_catalogue.sql"
+          blob="$(git rev-parse "${INPUT_SHA}:${migration_path}")"
+          [[ "${blob}" == "aca925f4205c0df5beddce15b3276b2aa38c43e1" ]]
+          raw_sha256="$(git cat-file blob "${INPUT_SHA}:${migration_path}" | sha256sum | cut -d ' ' -f 1)"
+          [[ "${raw_sha256}" == "066b650aac96f53c44082ed0484a48a0116f589094dc4f82bd36dd3c01475a19" ]]
+          [[ "$(git cat-file -s "${INPUT_SHA}:${migration_path}")" == "25222" ]]
+          echo "Canonical D2 source identity verified."
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: control/package-lock.json
+
+      - name: Install locked dependencies
+        working-directory: control
+        run: npm ci
+
+      - name: Build isolated post-D1 plus D2 inventory
+        id: inventory
+        shell: bash
+        env:
+          INPUT_SHA: ${{ inputs.approved_sha }}
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/purplelok-production-d2"
+          migrations="${root}/supabase/migrations"
+          mkdir -p "${migrations}"
+          cp approved/supabase/config.toml "${root}/supabase/config.toml"
+          expected=(
+            20260728110005_create_crm_schema.sql
+            20260728111045_seed_demo_data.sql
+            20260828120000_batch_1_identity_rbac_foundation.sql
+            20260828150000_batch_3b_tenant_ownership_foundation.sql
+            20260828170000_batch_4_active_organization_context.sql
+            20260829100000_batch_5a_tenant_data_foundation.sql
+            20260831120000_batch_5e_b2r_profile_authority.sql
+            20260902120000_batch_5f_c1_auth_session_gate.sql
+            20260903120000_batch_5f_d1_authorization_foundation.sql
+            20260903180000_batch_5f_d2_permission_catalogue.sql
+          )
+          for migration in "${expected[@]}"; do
+            git -C approved cat-file blob "${INPUT_SHA}:supabase/migrations/${migration}" > "${migrations}/${migration}"
+          done
+          mapfile -t actual < <(find "${migrations}" -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort)
+          [[ "${actual[*]}" == "${expected[*]}" ]]
+          [[ ! -e "${migrations}/20260904120000_batch_5f_d3_domain_rls_cutover.sql" ]]
+          [[ ! -e "${migrations}/20260904180000_batch_5f_d4_protected_workflows.sql" ]]
+          d2_sha="$(sha256sum "${migrations}/20260903180000_batch_5f_d2_permission_catalogue.sql" | cut -d ' ' -f 1)"
+          [[ "${d2_sha}" == "066b650aac96f53c44082ed0484a48a0116f589094dc4f82bd36dd3c01475a19" ]]
+          echo "root=${root}" >> "${GITHUB_OUTPUT}"
+          echo "Exact ten-file D2-only inventory verified."
+
+      - name: Stop until a supported D2 executor is approved
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "D2 executor is intentionally unconfigured; no production connection or mutation is permitted."
+          exit 1
+
+      # Once D1 establishes an approved official executor, a separately reviewed
+      # change must replace the fail-closed step above with this exact sequence:
+      #   1. batch5f-d2-production-check.ts pre
+      #   2. prove only D2 is pending in the isolated inventory
+      #   3. execute D2 once through that approved migration mechanism
+      #   4. batch5f-d2-production-check.ts after, even after an attempted apply
+
+      - name: Remove temporary migration material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -rf -- "${RUNNER_TEMP}/purplelok-production-d2"
