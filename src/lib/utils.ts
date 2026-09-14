@@ -91,6 +91,13 @@ export function isOverdue(dateStr: string | null | undefined): boolean {
   return new Date(dateStr) < new Date();
 }
 
+export function formatBytes(bytes: number | null | undefined): string {
+  if (!bytes || bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
 export function daysUntil(dateStr: string | null | undefined): number {
   if (!dateStr) return Infinity;
   const date = new Date(dateStr);

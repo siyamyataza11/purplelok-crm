@@ -1,0 +1,4 @@
+project_id = "purplelok-crm"
+
+[functions.ai-assistant]
+verify_jwt = true

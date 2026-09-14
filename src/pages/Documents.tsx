@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/components/ui/Toast';
@@ -9,8 +9,8 @@ import { Input, Select } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { formatDate, cn } from '@/lib/utils';
-import { Plus, FolderOpen, File, FileText, Image, Video, Upload, Search, Download } from 'lucide-react';
+import { formatDate, cn, formatBytes } from '@/lib/utils';
+import { Plus, FolderOpen, File, FileText, Image, Video, Upload, Search, Download, Loader2 } from 'lucide-react';
 
 const TYPE_ICONS: Record<string, React.ReactNode> = {
   file: <File size={18} />,
@@ -23,6 +23,13 @@ const TYPE_ICONS: Record<string, React.ReactNode> = {
   video: <Video size={18} />,
   template: <File size={18} />,
 };
+
+function inferTypeFromMime(mime: string): DocumentItem['type'] {
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime === 'application/pdf') return 'contract';
+  return 'file';
+}
 
 export function DocumentsPage() {
   const { profile } = useAuth();
@@ -52,6 +59,18 @@ export function DocumentsPage() {
     const matchesType = typeFilter === 'all' || d.type === typeFilter;
     return matchesSearch && matchesType;
   }), [documents, search, typeFilter]);
+
+  async function getSignedUrl(doc: DocumentItem) {
+    if (!doc.file_url) return;
+    try {
+      const filePath = doc.file_url.replace(/^documents\//, '');
+      const { data, error } = await supabase.storage.from('documents').createSignedUrl(filePath, 3600);
+      if (error) throw error;
+      window.open(data.signedUrl, '_blank');
+    } catch (err) {
+      add('error', 'Could not open file: ' + (err as Error).message);
+    }
+  }
 
   return (
     <div className="p-6 space-y-6 animate-fade-in max-w-[1400px] mx-auto">
@@ -97,10 +116,11 @@ export function DocumentsPage() {
               <p className="text-sm font-medium text-primary truncate">{doc.name}</p>
               <p className="text-xs text-tertiary mt-1">{doc.client?.company_name || 'No client'}</p>
               <p className="text-xs text-tertiary">{formatDate(doc.created_at)}</p>
+              {doc.file_size != null && <p className="text-xs text-tertiary">{formatBytes(doc.file_size)}</p>}
               {doc.file_url && (
-                <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="mt-2 flex items-center gap-1 text-xs text-purple-600 hover:underline opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={() => getSignedUrl(doc)} className="mt-2 flex items-center gap-1 text-xs text-purple-600 hover:underline opacity-0 group-hover:opacity-100 transition-opacity">
                   <Download size={12} /> Download
-                </a>
+                </button>
               )}
             </Card>
           ))}
@@ -117,8 +137,51 @@ function DocumentModal({ open, onClose, clients, onSaved }: { open: boolean; onC
   const { add } = useToast();
   const [form, setForm] = useState<Partial<DocumentItem>>({ type: 'file' });
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleFileSelect(file: File) {
+    setUploading(true);
+    setUploadProgress(0);
+    try {
+      const ext = file.name.split('.').pop() || 'bin';
+      const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      const filePath = `${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('documents')
+        .upload(filePath, file);
+
+      if (uploadError) throw uploadError;
+
+      setForm((prev) => ({
+        ...prev,
+        name: prev.name || file.name,
+        file_url: filePath,
+        mime_type: file.type,
+        file_size: file.size,
+        type: prev.type && prev.type !== 'file' ? prev.type : inferTypeFromMime(file.type),
+      }));
+      add('success', 'File uploaded');
+    } catch (err) {
+      add('error', 'Upload failed: ' + (err as Error).message);
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+    }
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFileSelect(file);
+  }
 
   async function handleSave() {
+    if (!form.name) { add('error', 'Name is required'); return; }
     setSaving(true);
     try {
       const { error } = await supabase.from('documents').insert({
@@ -126,12 +189,14 @@ function DocumentModal({ open, onClose, clients, onSaved }: { open: boolean; onC
         type: form.type || 'file',
         client_id: form.client_id || null,
         file_url: form.file_url,
+        file_size: form.file_size || null,
         mime_type: form.mime_type,
         uploaded_by: profile?.id,
       });
       if (error) throw error;
       add('success', 'Document added');
       onSaved();
+      setForm({ type: 'file' });
     } catch (err) {
       add('error', (err as Error).message);
     } finally {
@@ -141,8 +206,47 @@ function DocumentModal({ open, onClose, clients, onSaved }: { open: boolean; onC
 
   return (
     <Modal open={open} onClose={onClose} title="Add Document"
-      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={handleSave} loading={saving} disabled={!form.name}>Add Document</Button></>}>
+      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={handleSave} loading={saving} disabled={!form.name || uploading}>Add Document</Button></>}>
       <div className="space-y-4">
+        {/* Upload area */}
+        <div
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+          onClick={() => fileInputRef.current?.click()}
+          className={cn(
+            'border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors',
+            dragOver ? 'border-purple-400 bg-purple-50' : 'border-line hover:border-purple-200 hover:bg-muted'
+          )}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f); }}
+          />
+          {uploading ? (
+            <div className="flex flex-col items-center gap-2">
+              <Loader2 size={24} className="text-purple-600 animate-spin" />
+              <p className="text-sm text-secondary">Uploading... {uploadProgress}%</p>
+            </div>
+          ) : form.file_url ? (
+            <div className="flex flex-col items-center gap-2">
+              <div className="w-10 h-10 rounded-lg bg-green-50 flex items-center justify-center text-green-600">
+                <File size={20} />
+              </div>
+              <p className="text-sm font-medium text-primary">{form.name}</p>
+              <p className="text-xs text-tertiary">{form.file_size ? formatBytes(form.file_size) : ''} · Click to replace</p>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-2">
+              <Upload size={24} className="text-tertiary" />
+              <p className="text-sm text-secondary">Drag & drop a file here, or click to browse</p>
+              <p className="text-xs text-tertiary">PDF, images, videos, documents up to 50MB</p>
+            </div>
+          )}
+        </div>
+
         <Input label="Name" value={form.name || ''} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
         <div className="grid grid-cols-2 gap-4">
           <Select label="Type" value={form.type || 'file'} onChange={(e) => setForm({ ...form, type: e.target.value as DocumentItem['type'] })}>
@@ -161,8 +265,6 @@ function DocumentModal({ open, onClose, clients, onSaved }: { open: boolean; onC
             {clients.map((c) => <option key={c.id} value={c.id}>{c.company_name}</option>)}
           </Select>
         </div>
-        <Input label="File URL" value={form.file_url || ''} onChange={(e) => setForm({ ...form, file_url: e.target.value })} placeholder="https://..." />
-        <Input label="MIME Type" value={form.mime_type || ''} onChange={(e) => setForm({ ...form, mime_type: e.target.value })} placeholder="application/pdf" />
       </div>
     </Modal>
   );

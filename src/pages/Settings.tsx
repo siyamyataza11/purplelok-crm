@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { Input, Select } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { Avatar } from '@/components/ui/Avatar';
-import { User, Users, Shield, Bell, Lock, Mail, Phone, Save } from 'lucide-react';
+import { User, Users, Shield, Bell, Lock, Mail, Phone, Save, KeyRound, Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export function SettingsPage() {
@@ -141,23 +141,10 @@ export function SettingsPage() {
 
       {tab === 'security' && (
         <div className="space-y-4">
+          <ChangePasswordCard />
           <Card className="p-6">
             <CardTitle>Security Settings</CardTitle>
             <div className="space-y-4 mt-4">
-              <div className="flex items-center justify-between p-3 rounded-lg bg-muted">
-                <div className="flex items-center gap-3">
-                  <Lock size={18} className="text-tertiary" />
-                  <div><p className="text-sm font-medium text-primary">Password</p><p className="text-xs text-tertiary">Last changed recently</p></div>
-                </div>
-                <Button variant="outline" size="sm">Change Password</Button>
-              </div>
-              <div className="flex items-center justify-between p-3 rounded-lg bg-muted">
-                <div className="flex items-center gap-3">
-                  <Shield size={18} className="text-tertiary" />
-                  <div><p className="text-sm font-medium text-primary">Two-Factor Authentication</p><p className="text-xs text-tertiary">Add an extra layer of security</p></div>
-                </div>
-                <Button variant="outline" size="sm">Enable 2FA</Button>
-              </div>
               <div className="flex items-center justify-between p-3 rounded-lg bg-muted">
                 <div className="flex items-center gap-3">
                   <Mail size={18} className="text-tertiary" />
@@ -180,21 +167,173 @@ export function SettingsPage() {
       )}
 
       {tab === 'notifications' && (
-        <Card className="p-6">
-          <CardTitle>Notification Preferences</CardTitle>
-          <div className="space-y-3 mt-4">
-            {['Email notifications', 'SMS notifications', 'WhatsApp notifications', 'Browser push notifications', 'In-app notifications'].map((n, i) => (
-              <div key={n} className="flex items-center justify-between p-3 rounded-lg bg-muted">
-                <span className="text-sm text-secondary">{n}</span>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" defaultChecked={i < 3} className="sr-only peer" />
-                  <div className="w-10 h-5 bg-muted rounded-full peer peer-checked:bg-purple transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-5" />
-                </label>
-              </div>
-            ))}
-          </div>
-        </Card>
+        <NotificationPreferences userId={profile?.id} />
       )}
     </div>
+  );
+}
+
+function ChangePasswordCard() {
+  const { add } = useToast();
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPasswords, setShowPasswords] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function handleChangePassword() {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      add('error', 'All fields are required');
+      return;
+    }
+    if (newPassword.length < 6) {
+      add('error', 'New password must be at least 6 characters');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      add('error', 'New passwords do not match');
+      return;
+    }
+    setSaving(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      add('success', 'Password changed successfully');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err) {
+      add('error', (err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="p-6">
+      <div className="flex items-center gap-2 mb-4">
+        <KeyRound size={18} className="text-purple-600" />
+        <CardTitle>Change Password</CardTitle>
+      </div>
+      <div className="space-y-4 max-w-md">
+        <div className="relative">
+          <Input
+            label="Current Password"
+            type={showPasswords ? 'text' : 'password'}
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            placeholder="••••••••"
+          />
+        </div>
+        <Input
+          label="New Password"
+          type={showPasswords ? 'text' : 'password'}
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          placeholder="••••••••"
+        />
+        <Input
+          label="Confirm New Password"
+          type={showPasswords ? 'text' : 'password'}
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          placeholder="•••••••••"
+        />
+        <div className="flex items-center justify-between">
+          <label className="flex items-center gap-2 text-sm text-tertiary cursor-pointer select-none">
+            <input type="checkbox" checked={showPasswords} onChange={(e) => setShowPasswords(e.target.checked)} className="w-4 h-4 rounded border-line accent-purple-600" />
+            Show passwords
+          </label>
+          <Button onClick={handleChangePassword} loading={saving} disabled={!currentPassword || !newPassword || !confirmPassword}>
+            <Lock size={14} /> Update Password
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function NotificationPreferences({ userId }: { userId?: string }) {
+  const { add } = useToast();
+  const [prefs, setPrefs] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const prefKeys = ['email', 'sms', 'whatsapp', 'push', 'in_app'];
+  const prefLabels: Record<string, string> = {
+    email: 'Email notifications',
+    sms: 'SMS notifications',
+    whatsapp: 'WhatsApp notifications',
+    push: 'Browser push notifications',
+    in_app: 'In-app notifications',
+  };
+
+  useEffect(() => {
+    if (!userId) return;
+    async function load() {
+      const { data } = await supabase
+        .from('notification_preferences')
+        .select('*')
+        .eq('user_id', userId);
+      const map: Record<string, boolean> = {};
+      for (const k of prefKeys) map[k] = true;
+      if (data) {
+        for (const row of data as any[]) {
+          map[row.channel] = row.enabled;
+        }
+      }
+      setPrefs(map);
+      setLoading(false);
+    }
+    load();
+  }, [userId]);
+
+  async function togglePref(key: string, value: boolean) {
+    setPrefs((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function savePrefs() {
+    if (!userId) return;
+    setSaving(true);
+    try {
+      const rows = prefKeys.map((channel) => ({
+        user_id: userId,
+        channel,
+        enabled: prefs[channel] ?? true,
+      }));
+      const { error } = await supabase
+        .from('notification_preferences')
+        .upsert(rows, { onConflict: 'user_id,channel' });
+      if (error) throw error;
+      add('success', 'Notification preferences saved');
+    } catch (err) {
+      add('error', (err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return <Card className="p-6"><div className="h-32 bg-muted rounded-lg animate-pulse" /></Card>;
+  }
+
+  return (
+    <Card className="p-6">
+      <CardTitle>Notification Preferences</CardTitle>
+      <div className="space-y-3 mt-4">
+        {prefKeys.map((k) => (
+          <div key={k} className="flex items-center justify-between p-3 rounded-lg bg-muted">
+            <span className="text-sm text-secondary">{prefLabels[k]}</span>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" checked={prefs[k] ?? true} onChange={(e) => togglePref(k, e.target.checked)} className="sr-only peer" />
+              <div className="w-10 h-5 bg-muted rounded-full peer peer-checked:bg-purple transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-5" />
+            </label>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 flex justify-end">
+        <Button onClick={savePrefs} loading={saving}><Save size={16} /> Save Preferences</Button>
+      </div>
+    </Card>
   );
 }
